@@ -1,94 +1,36 @@
-# 🐉🐯 Dragon Tiger Analyzer
+# 🐉🐯 Dragon Tiger Analyzer — V4
 
-A transparent statistical-analysis and backtesting starter app for Dragon Tiger.
+V4 is a research and validation tool for Dragon Tiger history.
+
+## V4 changes
+- Keeps tables/sessions separate.
+- Accepts D/T/X history directly, so suits/cards are optional.
+- Road/sequence analysis: streaks, switching, transitions, recent structure.
+- Conditional pattern testing.
+- Leakage-safe walk-forward backtesting.
+- Compares several simple pre-declared rules and windows.
+- Shows coverage as well as accuracy so a model cannot hide behind very few signals.
+- Data-quality checks and CSV export.
+- Optional card/suit validation without silently assuming provider-specific Ace ranking.
+- Conservative **DRAGON / TIGER / NO BET** signal.
+
+## Recommended workflow
+1. Keep each provider/game variant/table session separate.
+2. If a table ends around 75–160 hands, save/export that session and start a new session.
+3. You do not need to manually build a 500-hand single-table history.
+4. Use screenshots for human review and enter only the D/T/Tie sequence when convenient.
+5. Use V4 backtesting to test whether a rule survives historical walk-forward testing.
+
+## Data format
+CSV should contain at least:
+
+- `Outcome` — D, T or X
+- optional `Table` or `Session`
+- optional `Hand`
+- optional `Dragon` card
+- optional `Tiger` card
 
 ## Important
+V4 does not assume Ace-high or Ace-low for card-derived winner calculations. Provider/table rules must be verified first. The recorded D/T/Tie result remains authoritative for sequence analysis.
 
-This project **does not claim to predict casino outcomes with certainty**. It separates:
-
-- historical frequency
-- conditional frequency
-- descriptive patterns
-- theoretical baseline
-- model signals
-
-A signal is not the same thing as a true probability of the next hand.
-
-## Run locally
-
-```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-## Input format
-
-Enter results oldest → newest:
-
-```text
-D T T D D X T D T
-```
-
-Where:
-
-- `D` = Dragon
-- `T` = Tiger
-- `X` = Tie
-
-The app also accepts `Dragon`, `Tiger`, and `Tie`.
-
-## Current MVP features
-
-- Dragon/Tiger/Tie frequencies
-- current streak
-- longest Dragon/Tiger streak
-- switching/alternation rate
-- recent-window analysis
-- conditional pattern frequency
-- simple baseline comparison
-- transparent Dragon/Tiger/LEAVE descriptive signal
-- CSV export
-
-## Planned versions
-
-### V2 — Card-level data
-Store actual ranks and suits.
-
-### V3 — Road/chart engine
-Reconstruct and analyze road layouts.
-
-### V4 — Backtesting
-Evaluate candidate rules on historical data.
-
-### V5 — Statistical validation
-Confidence intervals, hypothesis tests, multiple-testing controls.
-
-### V6 — Model comparison
-Compare transparent statistical models and calibrated probabilities.
-
-### V7 — Database + dashboard
-Persist tables, sessions, providers and variants.
-
-### V8 — Screenshot assistance
-Optional OCR/data-entry assistance for chart screenshots.
-
-## Suggested repository structure
-
-```text
-dragon-tiger-analyzer/
-├── app.py
-├── requirements.txt
-├── README.md
-├── data/
-├── src/
-│   ├── probability.py
-│   ├── patterns.py
-│   ├── statistics.py
-│   ├── backtest.py
-│   └── models.py
-└── tests/
-```
+V4 is not a guaranteed prediction system and must not be treated as proof that the next casino outcome is predictable.
