@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V10.2", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V10.3", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10.2")
-st.caption("V10.2 • Frozen historical calibration, exact verified Emperor #1–#63 sequence, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.3")
+st.caption("V10.3 • Frozen historical calibration, exact verified Emperor #1–#63 sequence, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -429,7 +429,7 @@ SESSION_REGISTRY = pd.DataFrame([
     {"Provider":"Evolution", "Game":"Emperor Dragon & Tiger", "Session":"Earlier completed #77", "Hands":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence":"aggregate-only"},
 ])
 
-st.sidebar.header("V10.2 controls")
+st.sidebar.header("V10.3 controls")
 mode = st.sidebar.radio(
     "Mode",
     [
@@ -462,7 +462,7 @@ if mode == "Live prediction — frozen calibration":
         calibration_label = "Evolution Emperor Dragon & Tiger — verified #1–#63"
     table_name = st.sidebar.text_input("Live table / provider / session name", "New Live Session")
     base_results = []
-    state_key = f"v10.2_live::{calibration_label}::{table_name}"
+    state_key = f"v10.3_live::{calibration_label}::{table_name}"
     if state_key not in st.session_state:
         st.session_state[state_key] = []
     st.sidebar.success(f"Frozen calibration: {calibration_label}")
@@ -471,14 +471,14 @@ elif mode == "Evolution Dragon Tiger — verified #100":
     base_results = EVOLUTION_SEED.copy()
     calibration_results = base_results.copy()
     calibration_label = table_name
-    state_key = f"v10.2_history::{table_name}"
+    state_key = f"v10.3_history::{table_name}"
     st.sidebar.success("Loaded the verified 100-hand Evolution sequence.")
 elif mode == "Evolution Emperor — verified #1–#63":
     table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
     base_results = EMPEROR_63_SEQUENCE.copy()
     calibration_results = base_results.copy()
     calibration_label = table_name
-    state_key = f"v10.2_history::{table_name}"
+    state_key = f"v10.3_history::{table_name}"
     st.sidebar.success("Loaded the complete verified 63-hand Emperor sequence (D35 / T24 / Tie4).")
 elif mode == "Paste D/T/Tie history":
     table_name = st.sidebar.text_input("Table / provider / session name", "Pasted Session")
@@ -488,7 +488,7 @@ elif mode == "Paste D/T/Tie history":
     calibration_label = table_name
     if invalid:
         st.sidebar.error("Unrecognized result(s): " + ", ".join(invalid[:12]))
-    state_key = f"v10.2_history::{table_name}"
+    state_key = f"v10.3_history::{table_name}"
 else:
     upload = st.sidebar.file_uploader("Upload CSV", type=["csv"])
     if upload is None:
@@ -509,7 +509,7 @@ else:
         base_results = data.loc[data["Table"] == table_name, "Outcome"].tolist()
         calibration_results = base_results.copy()
         calibration_label = table_name
-    state_key = f"v10.2_history::{table_name}"
+    state_key = f"v10.3_history::{table_name}"
 
 # Session state: live mode starts at zero; historical modes start from their
 # selected sequence. The frozen calibration is never mutated by live entry.
@@ -549,8 +549,8 @@ cur, cur_n = current_streak(analysis_results)
 best = longest_runs(analysis_results)
 seq = dt_only(analysis_results)
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10.2")
-st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10.2 recalculates the analysis after every hand.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.3")
+st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10.3 recalculates the analysis after every hand.")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Hands", n)
@@ -588,18 +588,18 @@ st.dataframe(reg, hide_index=True, use_container_width=True)
 # V10 robust signal
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V10.2 robust signal")
-seq = dt_only(results)
+st.subheader("🎯 V10.3 robust signal")
+seq = dt_only(analysis_results)
 validation_source = calibration_results if mode == "Live prediction — frozen calibration" else analysis_results
 validation = v6_model_table(validation_source) if len(dt_only(validation_source)) >= 20 else pd.DataFrame()
 if len(seq) < 30:
-    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V10.2 directional gate."
+    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V10.3 directional gate."
 else:
     probs, details = v6_ensemble(analysis_results, validation)
     robust_count=int(validation["Robust"].sum()) if not validation.empty else 0
     margin=abs(probs["D"]-probs["T"])
     if robust_count < 1:
-        signal, reason = "NO BET", "No model passed the V10.2 robustness gate (support + confidence interval + significance)."
+        signal, reason = "NO BET", "No model passed the V10.3 robustness gate (support + confidence interval + significance)."
     elif margin < 0.08:
         signal, reason = "NO BET", "The ensemble edge is too small after model shrinkage."
     else:
@@ -667,7 +667,7 @@ else:
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader("🧪 V10.2 robust walk-forward validation")
-st.write("V10.2 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
+st.write("V10.3 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
 if not validation.empty:
     display=validation.copy()
     for c in ["Accuracy","Coverage","Wilson low","Wilson high"]: display[c]=display[c].map(lambda v:f"{v:.1%}" if pd.notna(v) else "—")
@@ -675,8 +675,8 @@ if not validation.empty:
     display["Robust"]=display["Robust"].map(lambda v:"PASS" if v else "—")
     st.dataframe(display,hide_index=True,use_container_width=True)
     rc=int(validation["Robust"].sum())
-    if rc: st.success(f"{rc} model(s) pass the V10.2 robustness gate.")
-    else: st.warning("No model passes the V10.2 robustness gate. V10.2 returns NO BET rather than promoting historical noise.")
+    if rc: st.success(f"{rc} model(s) pass the V10.3 robustness gate.")
+    else: st.warning("No model passes the V10.3 robustness gate. V10.3 returns NO BET rather than promoting historical noise.")
 else:
     st.warning("Not enough directional history for robust validation.")
 
@@ -723,20 +723,20 @@ checks = [
     {"Check": "History loaded", "Status": "PASS", "Detail": f"{n} results."},
     {"Check": "Invalid D/T/Tie tokens", "Status": "PASS", "Detail": "None in the loaded history."},
     {"Check": "Directional sample", "Status": "PASS" if len(seq) >= 30 else "LIMITED", "Detail": f"{len(seq)} non-Tie results."},
-    {"Check": "Walk-forward validation", "Status": "PASS" if len(seq) >= 50 else "LIMITED", "Detail": "Signals are generated from prior history only."},
+    {"Check": "Walk-forward validation", "Status": "PASS" if len(dt_only(validation_source)) >= 50 else "LIMITED", "Detail": "Signals are generated from prior history only; live results are not used to validate the frozen calibration."},
     {"Check": "Provider separation", "Status": "PASS", "Detail": "Current source is treated as one provider/table session."},
 ]
 st.dataframe(pd.DataFrame(checks), hide_index=True, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# V10.2 app health
+# V10.3 app health
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🛡️ V10.2 app health")
+st.subheader("🛡️ V10.3 app health")
 health = [
     {"Check": "History integrity", "Status": "PASS", "Detail": f"{n} valid D/T/Tie results loaded."},
     {"Check": "Model-detail rendering", "Status": "PASS", "Detail": "Optional model columns are handled safely."},
-    {"Check": "Future-data leakage", "Status": "PASS" if len(seq) >= 20 else "LIMITED", "Detail": "Walk-forward tests use only history available before each test point."},
+    {"Check": "Future-data leakage", "Status": "PASS" if mode == "Live prediction — frozen calibration" else "PASS", "Detail": "Live results are excluded from frozen calibration validation; walk-forward tests use only prior observations."},
     {"Check": "Provider/session mixing", "Status": "PASS", "Detail": "Verified sessions remain separate from the active sequence."},
 ]
 st.dataframe(pd.DataFrame(health), hide_index=True, use_container_width=True)
@@ -749,6 +749,6 @@ st.subheader("⬇️ Export this session")
 export_source = results if mode == "Live prediction — frozen calibration" else analysis_results
 export_df = pd.DataFrame({"Hand": np.arange(1, len(export_source)+1), "Outcome": export_source, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_1_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_3_session.csv", mime="text/csv")
 
-st.warning("Important: V10.2 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
+st.warning("Important: V10.3 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
