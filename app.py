@@ -47,9 +47,9 @@ EMPEROR_EVOLUTION_63 = (
     "T D T D T D T T T D "
     "D T T T T D X T D D "
     "T D T D D T D D D T "
-    "D T D T D T D D D D "
-    "D T D D X T T T D D "
-    "D D D D D D T"
+    "D T D T D D D D D T "
+    "D D X T T T D D D D "
+    "D D T"
 ).split()
 
 assert len(EMPEROR_EVOLUTION_63) == 63
