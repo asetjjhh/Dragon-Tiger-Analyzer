@@ -7,17 +7,17 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V9", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V10", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V9")
-st.caption("V9 • Error-safe validation, provider/session separation, verified historical records, confidence bounds, stability scoring and conservative signals.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10")
+st.caption("V10 • Frozen historical calibration, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
 # The road in the supplied #100 screenshot was reconstructed from the visible
 # 6-row bead-style grid. Reading columns top-to-bottom reproduces the displayed
 # #73 checkpoint counts (D32 / T37 / Tie4) and the #100 totals (D43 / T52 / Tie5).
-# This is a seed history, not a claim that the next casino outcome is predictable.
+# This is a verified calibration sequence, not a claim that the next casino outcome is predictable.
 # -----------------------------------------------------------------------------
 EVOLUTION_SEED = (
     "T D D D T D "
@@ -41,33 +41,12 @@ EVOLUTION_SEED = (
 
 assert len(EVOLUTION_SEED) == 100
 
-# Verified Evolution — Emperor Dragon & Tiger #1–#63.
-EMPEROR_EVOLUTION_63 = (
-    "D T D D X D D D T X "
-    "T D T D T D T T T D "
-    "D T T T T D X T D D "
-    "T D T D D T D D D T "
-    "D T D T D D D D D T "
-    "D D X T T T D D D D "
-    "D D T"
-).split()
-
-assert len(EMPEROR_EVOLUTION_63) == 63
-assert EMPEROR_EVOLUTION_63.count("D") == 35
-assert EMPEROR_EVOLUTION_63.count("T") == 24
-assert EMPEROR_EVOLUTION_63.count("X") == 4
-
 # Verified aggregate summaries from the supplied completed screenshots.
 # These are intentionally NOT converted into invented hand-by-hand sequences.
 KNOWN_SESSIONS = pd.DataFrame([
-    # Latest verified completed sessions supplied by the user.
-    {"Provider":"Evolution", "Game":"Dragon Tiger", "Session":"Latest verified #1–#102", "Captured through":102, "Dragon":54, "Tiger":40, "Tie":8, "Sequence available":False},
-    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Session":"Latest verified #1–#112", "Captured through":112, "Dragon":54, "Tiger":49, "Tie":9, "Sequence available":False},
-    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Session":"Verified #1–#63", "Captured through":63, "Dragon":35, "Tiger":24, "Tie":4, "Sequence available":True},
-    # Older verified aggregate checkpoints are retained separately.
-    {"Provider":"Evolution", "Game":"Dragon Tiger", "Session":"Older verified #1–#145 checkpoint", "Captured through":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence available":False},
-    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Session":"Older verified #1–#92 checkpoint", "Captured through":92, "Dragon":43, "Tiger":42, "Tie":7, "Sequence available":False},
-    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Session":"Older verified #1–#77 checkpoint", "Captured through":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence available":False},
+    {"Provider":"Evolution", "Game":"Dragon Tiger", "Captured through":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence available":False},
+    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Captured through":92, "Dragon":43, "Tiger":42, "Tie":7, "Sequence available":False},
+    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Captured through":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence available":False},
 ])
 
 
@@ -420,113 +399,154 @@ def v6_ensemble(results, validation):
     return {"D":d/z,"T":t/z}, [{"Model":n,"D":p["D"],"T":p["T"],"Support":int(p.get("samples",0)),"Weight":w,"Robust":r} for n,p,w,r in details]
 
 # -----------------------------------------------------------------------------
-# Sidebar
+# V10 frozen historical registry + live session controls
 # -----------------------------------------------------------------------------
-st.sidebar.header("V9 controls")
-mode = st.sidebar.radio(
-    "History source",
-    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Verified aggregate sessions", "Paste D/T/Tie", "Upload CSV"],
+# IMPORTANT: only hand-by-hand histories that were actually reconstructed are
+# used for sequence models. Aggregate-only records remain visible as calibration
+# metadata and are never turned into invented sequences.
+
+EVOLUTION_SEED = EVOLUTION_SEED  # preserved verified 100-hand reconstruction
+
+# Verified visible tail from the supplied V9 Emperor #1-#63 screen. The V9
+# screen also showed the authoritative aggregate D35/T24/Tie4. Because the
+# middle hands are not reproduced in the current source artifact, V10 does not
+# fabricate them.
+EMPEROR_63_TAIL = "T D D D D D T D D X T T D D D D D D D T".split()
+
+# Frozen aggregate registry. These are evidence records, not synthetic sequences.
+SESSION_REGISTRY = pd.DataFrame([
+    {"Provider":"Evolution", "Game":"Dragon Tiger", "Session":"Verified captured table #145", "Hands":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence":"aggregate-only"},
+    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Session":"Verified captured table #112", "Hands":112, "Dragon":54, "Tiger":49, "Tie":9, "Sequence":"aggregate-only"},
+    {"Provider":"Evolution", "Game":"Emperor Dragon & Tiger", "Session":"Verified #1–#63", "Hands":63, "Dragon":35, "Tiger":24, "Tie":4, "Sequence":"verified tail only"},
+    {"Provider":"Evolution", "Game":"Emperor Dragon & Tiger", "Session":"Earlier completed #77", "Hands":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence":"aggregate-only"},
+])
+
+st.sidebar.header("V10 controls")
+source = st.sidebar.radio(
+    "Starting history",
+    [
+        "Evolution Dragon Tiger — verified #100",
+        "Evolution Emperor — verified #1–#63 (tail)",
+        "New live session — start empty",
+        "Paste D/T/Tie history",
+        "Upload CSV",
+    ],
     index=0,
 )
 
-if mode == "Built-in Evolution #100":
-    table_name = "Evolution Dragon Tiger — captured to #100"
-    results = EVOLUTION_SEED.copy()
-    st.sidebar.success("Loaded the captured #100 Evolution road history.")
-elif mode == "Verified Emperor Evolution #63":
+if source == "Evolution Dragon Tiger — verified #100":
+    table_name = "Evolution Dragon Tiger — verified #100"
+    base_results = EVOLUTION_SEED.copy()
+    st.sidebar.success("Loaded the verified 100-hand Evolution sequence.")
+elif source == "Evolution Emperor — verified #1–#63 (tail)":
     table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
-    results = EMPEROR_EVOLUTION_63.copy()
-    st.sidebar.success("Loaded verified Emperor #1–#63: D35 / T24 / Tie4.")
-elif mode == "Verified aggregate sessions":
-    ref = st.sidebar.selectbox(
-        "Verified session",
-        [
-            "Evolution Dragon Tiger — #102 (D54/T40/Tie8)",
-            "Pragmatic Play Live Dragon Tiger — #112 (D54/T49/Tie9)",
-        ],
-    )
-    if ref.startswith("Evolution"):
-        table_name = "Evolution Dragon Tiger — verified aggregate through #102"
-        d, t, x = 54, 40, 8
-    else:
-        table_name = "Pragmatic Play Live Dragon Tiger — verified aggregate through #112"
-        d, t, x = 54, 49, 9
-    st.subheader("📊 Verified aggregate record")
-    a,b,c,dcol = st.columns(4)
-    a.metric("Hands captured", d+t+x)
-    b.metric("Dragon", f"{d} ({d/(d+t+x):.1%})")
-    c.metric("Tiger", f"{t} ({t/(d+t+x):.1%})")
-    dcol.metric("Tie", f"{x} ({x/(d+t+x):.1%})")
-    st.info("This record is preserved exactly as verified from the supplied completed-session totals. Because the chronological hand order is not stored in the current V9 artifact, V9 does not invent a sequence or run sequence-based prediction on it.")
-    st.stop()
-elif mode == "Paste D/T/Tie":
-    table_name = st.sidebar.text_input("Table / provider / session name", "Current Session")
-    text = st.sidebar.text_area("Paste results, oldest → newest", "", height=180, placeholder="D T T D X D T ...")
-    results, invalid = clean_tokens(text)
+    base_results = EMPEROR_63_TAIL.copy()
+    st.sidebar.warning("Only the last 20 hands are sequence-verified in the current source artifact. V10 will not invent the missing middle hands.")
+elif source == "New live session — start empty":
+    table_name = st.sidebar.text_input("Live table / provider / session name", "New Live Session")
+    base_results = []
+elif source == "Paste D/T/Tie history":
+    table_name = st.sidebar.text_input("Table / provider / session name", "Pasted Session")
+    text = st.sidebar.text_area("Paste results, oldest → newest", "", height=160, placeholder="D T T D X D T ...")
+    base_results, invalid = clean_tokens(text)
     if invalid:
-        st.sidebar.error("Input error — unrecognized result(s): " + ", ".join(invalid[:12]))
-    if not results:
-        st.info("Paste a D/T/Tie history to begin V9.")
-        st.stop()
+        st.sidebar.error("Unrecognized result(s): " + ", ".join(invalid[:12]))
 else:
     upload = st.sidebar.file_uploader("Upload CSV", type=["csv"])
     if upload is None:
-        st.info("Upload a CSV with an Outcome column to begin V9.")
-        st.stop()
-    raw = pd.read_csv(upload)
-    data, note = clean_csv(raw)
-    if note:
-        st.sidebar.warning(note)
-    if data.empty:
-        st.error("No valid D/T/Tie history found.")
-        st.stop()
-    table_names = list(data["Table"].unique())
-    table_name = st.sidebar.selectbox("Table / session", table_names)
-    results = data.loc[data["Table"] == table_name, "Outcome"].tolist()
+        base_results = []
+        table_name = "CSV Session"
+    else:
+        raw = pd.read_csv(upload)
+        data, note = clean_csv(raw)
+        if note:
+            st.sidebar.warning(note)
+        if data.empty:
+            st.error("No valid D/T/Tie history found.")
+            st.stop()
+        table_names = list(data["Table"].unique())
+        table_name = st.sidebar.selectbox("Table / session", table_names)
+        base_results = data.loc[data["Table"] == table_name, "Outcome"].tolist()
 
-if not results:
-    st.error("No usable history.")
-    st.stop()
+# Session state makes future use simple: enter only the newest outcome.
+state_key = f"v10_session::{table_name}"
+if state_key not in st.session_state:
+    st.session_state[state_key] = list(base_results)
+
+if source != "New live session — start empty" and st.sidebar.checkbox("Reset this session to its selected starting history", value=False):
+    st.session_state[state_key] = list(base_results)
+
+results = st.session_state[state_key]
+
+st.sidebar.markdown("### ➕ Add newest result")
+a,b,c,d = st.sidebar.columns(4)
+if a.button("🐉 D", use_container_width=True):
+    results.append("D")
+if b.button("🐯 T", use_container_width=True):
+    results.append("T")
+if c.button("🟰 Tie", use_container_width=True):
+    results.append("X")
+if d.button("↩ Undo", use_container_width=True) and results:
+    results.pop()
+st.session_state[state_key] = results
+
+st.sidebar.caption(f"Current session length: {len(results)} hands")
 
 # -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Historical verified sessions
-# -----------------------------------------------------------------------------
-with st.expander("📚 Historical verified sessions", expanded=False):
-    st.dataframe(KNOWN_SESSIONS, hide_index=True, use_container_width=True)
-    st.caption("Latest verified aggregates: Evolution Dragon Tiger #102 = D54/T40/Tie8; Pragmatic Play Live Dragon Tiger #112 = D54/T49/Tie9. These are retained for reference and are not fabricated into chronological sequences.")
-
 d, t, x = counts(results)
 n = len(results)
 cur, cur_n = current_streak(results)
 best = longest_runs(results)
 seq = dt_only(results)
 
+st.title("🐉🐯 Dragon Tiger Analyzer — V10")
+st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10 recalculates the analysis after every hand.")
+
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Hands captured", n)
-c2.metric("Dragon", f"{d/n:.1%}")
-c3.metric("Tiger", f"{t/n:.1%}")
-c4.metric("Tie", f"{x/n:.1%}")
-c5.metric("Current run", f"{cur} × {cur_n}")
+c1.metric("Hands", n)
+c2.metric("Dragon", f"{d/n:.1%}" if n else "—")
+c3.metric("Tiger", f"{t/n:.1%}" if n else "—")
+c4.metric("Tie", f"{x/n:.1%}" if n else "—")
+c5.metric("Current run", f"{cur} × {cur_n}" if n else "—")
 st.caption(f"Selected source: **{table_name}**")
 
+if not results:
+    st.info("No live results yet. Use the D / T / Tie buttons in the sidebar to begin the session.")
+    st.stop()
+
 # -----------------------------------------------------------------------------
-# V9 robust signal
+# Frozen calibration registry
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V9 robust signal")
+st.subheader("📚 Frozen historical calibration")
+st.write("These records are kept separate by provider/game/session. Aggregate-only records are never converted into fake hand-by-hand sequences.")
+reg = SESSION_REGISTRY.copy()
+for col in ["Dragon","Tiger","Tie"]:
+    reg[col] = reg[col].astype(int)
+reg["Dragon %"] = reg["Dragon"] / reg["Hands"]
+reg["Tiger %"] = reg["Tiger"] / reg["Hands"]
+reg["Tie %"] = reg["Tie"] / reg["Hands"]
+for col in ["Dragon %","Tiger %","Tie %"]:
+    reg[col] = reg[col].map(lambda v: f"{v:.1%}")
+st.dataframe(reg, hide_index=True, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# V10 robust signal
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🎯 V10 robust signal")
 seq = dt_only(results)
 validation = v6_model_table(results) if len(seq) >= 20 else pd.DataFrame()
 if len(seq) < 30:
-    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V6 directional gate."
+    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V10 directional gate."
 else:
     probs, details = v6_ensemble(results, validation)
     robust_count=int(validation["Robust"].sum()) if not validation.empty else 0
     margin=abs(probs["D"]-probs["T"])
     if robust_count < 1:
-        signal, reason = "NO BET", "No model passed the V9 robustness gate (support + confidence interval + significance)."
+        signal, reason = "NO BET", "No model passed the V10 robustness gate (support + confidence interval + significance)."
     elif margin < 0.08:
         signal, reason = "NO BET", "The ensemble edge is too small after model shrinkage."
     else:
@@ -537,16 +557,6 @@ s1,s2,s3=st.columns(3)
 s1.metric("Recommendation",label); s2.metric("Dragon model",f"{probs['D']:.1%}"); s3.metric("Tiger model",f"{probs['T']:.1%}")
 st.info(reason)
 st.caption("Research signal only — historical patterns cannot guarantee the next casino outcome.")
-
-# Captured session registry
-st.divider()
-st.subheader("📚 Captured session registry")
-st.write("Completed totals directly visible in the supplied screenshots. V9 does not invent missing hand-by-hand sequences.")
-reg=KNOWN_SESSIONS.copy()
-reg["Dragon %"]=reg["Dragon"]/reg["Captured through"]; reg["Tiger %"]=reg["Tiger"]/reg["Captured through"]; reg["Tie %"]=reg["Tie"]/reg["Captured through"]
-rv=reg[["Provider","Game","Captured through","Dragon","Tiger","Tie","Dragon %","Tiger %","Tie %","Sequence available"]].copy()
-for c in ["Dragon %","Tiger %","Tie %"]: rv[c]=rv[c].map(lambda v:f"{v:.1%}")
-st.dataframe(rv,hide_index=True,use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # Road structure
@@ -581,7 +591,7 @@ if not tr.empty:
 st.divider()
 st.subheader("🧠 Ensemble model details")
 if details:
-    # V9 keeps display schemas defensive: different model builders may return
+    # V10 keeps display schemas defensive: different model builders may return
     # different metadata fields. Never crash because an optional column is absent.
     md = pd.DataFrame(details)
     for col in ("D", "T"):
@@ -603,8 +613,8 @@ else:
 # Robust walk-forward validation
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🧪 V9 robust walk-forward validation")
-st.write("V9 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
+st.subheader("🧪 V10 robust walk-forward validation")
+st.write("V10 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
 if not validation.empty:
     display=validation.copy()
     for c in ["Accuracy","Coverage","Wilson low","Wilson high"]: display[c]=display[c].map(lambda v:f"{v:.1%}" if pd.notna(v) else "—")
@@ -612,8 +622,8 @@ if not validation.empty:
     display["Robust"]=display["Robust"].map(lambda v:"PASS" if v else "—")
     st.dataframe(display,hide_index=True,use_container_width=True)
     rc=int(validation["Robust"].sum())
-    if rc: st.success(f"{rc} model(s) pass the V9 robustness gate.")
-    else: st.warning("No model passes the V9 robustness gate. V9 returns NO BET rather than promoting historical noise.")
+    if rc: st.success(f"{rc} model(s) pass the V10 robustness gate.")
+    else: st.warning("No model passes the V10 robustness gate. V10 returns NO BET rather than promoting historical noise.")
 else:
     st.warning("Not enough directional history for robust validation.")
 
@@ -666,10 +676,10 @@ checks = [
 st.dataframe(pd.DataFrame(checks), hide_index=True, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# V9 app health
+# V10 app health
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🛡️ V9 app health")
+st.subheader("🛡️ V10 app health")
 health = [
     {"Check": "History integrity", "Status": "PASS", "Detail": f"{n} valid D/T/Tie results loaded."},
     {"Check": "Model-detail rendering", "Status": "PASS", "Detail": "Optional model columns are handled safely."},
@@ -685,6 +695,6 @@ st.divider()
 st.subheader("⬇️ Export this session")
 export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v9_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_session.csv", mime="text/csv")
 
-st.warning("Important: V9 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
+st.warning("Important: V10 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
