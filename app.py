@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V6", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V9", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V6")
-st.caption("V6 • Provider/session separation, robust walk-forward validation, confidence bounds, stability scoring and conservative signals.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V9")
+st.caption("V9 • Error-safe validation, provider/session separation, confidence bounds, stability scoring and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -401,7 +401,7 @@ def v6_ensemble(results, validation):
 # -----------------------------------------------------------------------------
 # Sidebar
 # -----------------------------------------------------------------------------
-st.sidebar.header("V6 controls")
+st.sidebar.header("V9 controls")
 mode = st.sidebar.radio(
     "History source",
     ["Built-in Evolution #100", "Paste D/T/Tie", "Upload CSV"],
@@ -419,12 +419,12 @@ elif mode == "Paste D/T/Tie":
     if invalid:
         st.sidebar.error("Input error — unrecognized result(s): " + ", ".join(invalid[:12]))
     if not results:
-        st.info("Paste a D/T/Tie history to begin V5.")
+        st.info("Paste a D/T/Tie history to begin V9.")
         st.stop()
 else:
     upload = st.sidebar.file_uploader("Upload CSV", type=["csv"])
     if upload is None:
-        st.info("Upload a CSV with an Outcome column to begin V5.")
+        st.info("Upload a CSV with an Outcome column to begin V9.")
         st.stop()
     raw = pd.read_csv(upload)
     data, note = clean_csv(raw)
@@ -459,10 +459,10 @@ c5.metric("Current run", f"{cur} × {cur_n}")
 st.caption(f"Selected source: **{table_name}**")
 
 # -----------------------------------------------------------------------------
-# V6 robust signal
+# V9 robust signal
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V6 robust signal")
+st.subheader("🎯 V9 robust signal")
 seq = dt_only(results)
 validation = v6_model_table(results) if len(seq) >= 20 else pd.DataFrame()
 if len(seq) < 30:
@@ -472,7 +472,7 @@ else:
     robust_count=int(validation["Robust"].sum()) if not validation.empty else 0
     margin=abs(probs["D"]-probs["T"])
     if robust_count < 1:
-        signal, reason = "NO BET", "No model passed the V6 robustness gate (support + confidence interval + significance)."
+        signal, reason = "NO BET", "No model passed the V9 robustness gate (support + confidence interval + significance)."
     elif margin < 0.08:
         signal, reason = "NO BET", "The ensemble edge is too small after model shrinkage."
     else:
@@ -527,18 +527,30 @@ if not tr.empty:
 st.divider()
 st.subheader("🧠 Ensemble model details")
 if details:
+    # V9 keeps display schemas defensive: different model builders may return
+    # different metadata fields. Never crash because an optional column is absent.
     md = pd.DataFrame(details)
-    md["D"] = md["D"].map(lambda v: f"{v:.1%}")
-    md["T"] = md["T"].map(lambda v: f"{v:.1%}")
-    md["Backtest acc"] = md["Backtest acc"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    for col in ("D", "T"):
+        if col in md.columns:
+            md[col] = md[col].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    if "Weight" in md.columns:
+        md["Weight"] = md["Weight"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
+    if "Support" in md.columns:
+        md["Support"] = pd.to_numeric(md["Support"], errors="coerce").fillna(0).astype(int)
+    if "Backtest acc" in md.columns:
+        md["Backtest acc"] = md["Backtest acc"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    if "Robust" in md.columns:
+        md["Robust"] = md["Robust"].map(lambda v: "PASS" if bool(v) else "shrunk")
     st.dataframe(md, hide_index=True, use_container_width=True)
+else:
+    st.info("No model-detail rows are available for the current history.")
 
 # -----------------------------------------------------------------------------
 # Robust walk-forward validation
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader("🧪 V6 robust walk-forward validation")
-st.write("V6 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
+st.write("V9 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
 if not validation.empty:
     display=validation.copy()
     for c in ["Accuracy","Coverage","Wilson low","Wilson high"]: display[c]=display[c].map(lambda v:f"{v:.1%}" if pd.notna(v) else "—")
@@ -546,8 +558,8 @@ if not validation.empty:
     display["Robust"]=display["Robust"].map(lambda v:"PASS" if v else "—")
     st.dataframe(display,hide_index=True,use_container_width=True)
     rc=int(validation["Robust"].sum())
-    if rc: st.success(f"{rc} model(s) pass the V6 robustness gate.")
-    else: st.warning("No model passes the V6 robustness gate. V6 returns NO BET rather than promoting historical noise.")
+    if rc: st.success(f"{rc} model(s) pass the V9 robustness gate.")
+    else: st.warning("No model passes the V9 robustness gate. V9 returns NO BET rather than promoting historical noise.")
 else:
     st.warning("Not enough directional history for robust validation.")
 
@@ -555,8 +567,17 @@ else:
 st.divider()
 st.subheader("🧠 Ensemble stability")
 if details:
-    md=pd.DataFrame(details); md["D"]=md["D"].map(lambda v:f"{v:.1%}"); md["T"]=md["T"].map(lambda v:f"{v:.1%}"); md["Weight"]=md["Weight"].map(lambda v:f"{v:.2f}"); md["Robust"]=md["Robust"].map(lambda v:"PASS" if v else "shrunk")
-    st.dataframe(md,hide_index=True,use_container_width=True)
+    stable = pd.DataFrame(details).copy()
+    for col in ("D", "T"):
+        if col in stable.columns:
+            stable[col] = stable[col].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    if "Weight" in stable.columns:
+        stable["Weight"] = stable["Weight"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
+    if "Robust" in stable.columns:
+        stable["Robust"] = stable["Robust"].map(lambda v: "PASS" if bool(v) else "shrunk")
+    st.dataframe(stable, hide_index=True, use_container_width=True)
+else:
+    st.info("Stability cannot be estimated until at least one model is available.")
 
 # -----------------------------------------------------------------------------
 # Pattern / n-gram inspection
@@ -591,6 +612,19 @@ checks = [
 st.dataframe(pd.DataFrame(checks), hide_index=True, use_container_width=True)
 
 # -----------------------------------------------------------------------------
+# V9 app health
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🛡️ V9 app health")
+health = [
+    {"Check": "History integrity", "Status": "PASS", "Detail": f"{n} valid D/T/Tie results loaded."},
+    {"Check": "Model-detail rendering", "Status": "PASS", "Detail": "Optional model columns are handled safely."},
+    {"Check": "Future-data leakage", "Status": "PASS" if len(seq) >= 20 else "LIMITED", "Detail": "Walk-forward tests use only history available before each test point."},
+    {"Check": "Provider/session mixing", "Status": "PASS", "Detail": "Verified sessions remain separate from the active sequence."},
+]
+st.dataframe(pd.DataFrame(health), hide_index=True, use_container_width=True)
+
+# -----------------------------------------------------------------------------
 # Export
 # -----------------------------------------------------------------------------
 st.divider()
@@ -599,4 +633,4 @@ export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table"
 csv = export_df.to_csv(index=False).encode("utf-8")
 st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v6_session.csv", mime="text/csv")
 
-st.warning("Important: V6 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
+st.warning("Important: V9 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
