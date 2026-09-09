@@ -1,16 +1,16 @@
 import re
 from collections import Counter, defaultdict
-from math import sqrt
+from math import sqrt, comb
 from io import StringIO
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V5", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V6", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V5")
-st.caption("V5 • Provider/session separation, road-structure models, leakage-safe walk-forward validation, adaptive ensemble and input checks.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V6")
+st.caption("V6 • Provider/session separation, robust walk-forward validation, confidence bounds, stability scoring and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -40,6 +40,15 @@ EVOLUTION_SEED = (
 ).split()
 
 assert len(EVOLUTION_SEED) == 100
+
+# Verified aggregate summaries from the supplied completed screenshots.
+# These are intentionally NOT converted into invented hand-by-hand sequences.
+KNOWN_SESSIONS = pd.DataFrame([
+    {"Provider":"Evolution", "Game":"Dragon Tiger", "Captured through":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence available":False},
+    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Captured through":92, "Dragon":43, "Tiger":42, "Tie":7, "Sequence available":False},
+    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Captured through":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence available":False},
+])
+
 
 
 def parse_result(x):
@@ -342,9 +351,57 @@ def transition_table(seq):
 
 
 # -----------------------------------------------------------------------------
+# V6 validation helpers
+# -----------------------------------------------------------------------------
+def wilson(k, n, z=1.96):
+    if n <= 0:
+        return np.nan, np.nan
+    p = k / n
+    den = 1 + z*z/n
+    center = p + z*z/(2*n)
+    half = z * sqrt((p*(1-p) + z*z/(4*n))/n)
+    return (center-half)/den, (center+half)/den
+
+def exact_binomial_pvalue(k, n):
+    if n <= 0:
+        return np.nan
+    tail_k = min(k, n-k)
+    tail = sum(comb(n, i) for i in range(tail_k+1)) / (2**n)
+    return min(1.0, 2*tail)
+
+def v6_model_table(results):
+    names = ["Recent-5","Recent-10","Recent-20","Transition","N-gram-1","N-gram-2","N-gram-3","N-gram-4"]
+    seq = dt_only(results)
+    rows=[]
+    for name in names:
+        bt=walk_forward_model(results,name)
+        sig=bt[bt["Signal"].isin(["D","T"])] if not bt.empty else pd.DataFrame()
+        n_sig=len(sig); correct=int(sig["Correct"].sum()) if n_sig else 0
+        acc=correct/n_sig if n_sig else np.nan
+        lo,hi=wilson(correct,n_sig)
+        pv=exact_binomial_pvalue(correct,n_sig) if n_sig else np.nan
+        robust=bool(n_sig>=20 and pd.notna(lo) and lo>0.50 and pd.notna(pv) and pv<0.10)
+        rows.append({"Model":name,"Test points":len(bt),"Signals":n_sig,"Accuracy":acc,"Coverage":n_sig/len(bt) if len(bt) else np.nan,"Wilson low":lo,"Wilson high":hi,"p-value":pv,"Robust":robust})
+    return pd.DataFrame(rows)
+
+def v6_ensemble(results, validation):
+    seq=dt_only(results); models=model_probs(seq); details=[]
+    for name,p in models.items():
+        r=validation[validation["Model"]==name]
+        if r.empty: continue
+        r=r.iloc[0]; acc=r["Accuracy"]; support=float(p.get("samples",0))
+        weight=0.15 if pd.isna(acc) else 0.25 + min(0.75,max(0.0,float(acc)-0.50)*4)
+        if not bool(r["Robust"]): weight*=0.55
+        weight*=min(1.0,0.50+0.50*min(1.0,support/20.0))
+        details.append((name,p,weight,bool(r["Robust"])))
+    if not details: return {"D":0.5,"T":0.5},[]
+    d=sum(p["D"]*w for _,p,w,_ in details); t=sum(p["T"]*w for _,p,w,_ in details); z=d+t
+    return {"D":d/z,"T":t/z}, [{"Model":n,"D":p["D"],"T":p["T"],"Support":int(p.get("samples",0)),"Weight":w,"Robust":r} for n,p,w,r in details]
+
+# -----------------------------------------------------------------------------
 # Sidebar
 # -----------------------------------------------------------------------------
-st.sidebar.header("V5 controls")
+st.sidebar.header("V6 controls")
 mode = st.sidebar.radio(
     "History source",
     ["Built-in Evolution #100", "Paste D/T/Tie", "Upload CSV"],
@@ -402,28 +459,40 @@ c5.metric("Current run", f"{cur} × {cur_n}")
 st.caption(f"Selected source: **{table_name}**")
 
 # -----------------------------------------------------------------------------
-# Final signal
+# V6 robust signal
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V5 current signal")
-signal, probs, details, reason = signal_with_tie(results)
-
-if signal == "DRAGON":
-    label = "🐉 DRAGON"
-elif signal == "TIGER":
-    label = "🐯 TIGER"
-elif signal == "TIE":
-    label = "🟢 TIE"
+st.subheader("🎯 V6 robust signal")
+seq = dt_only(results)
+validation = v6_model_table(results) if len(seq) >= 20 else pd.DataFrame()
+if len(seq) < 30:
+    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V6 directional gate."
 else:
-    label = "⚪ NO BET"
-
-s1, s2, s3, s4 = st.columns(4)
-s1.metric("Recommendation", label)
-s2.metric("Dragon model", f"{probs['D']:.1%}")
-s3.metric("Tiger model", f"{probs['T']:.1%}")
-s4.metric("Tie screen", f"{probs['X']:.1%}")
+    probs, details = v6_ensemble(results, validation)
+    robust_count=int(validation["Robust"].sum()) if not validation.empty else 0
+    margin=abs(probs["D"]-probs["T"])
+    if robust_count < 1:
+        signal, reason = "NO BET", "No model passed the V6 robustness gate (support + confidence interval + significance)."
+    elif margin < 0.08:
+        signal, reason = "NO BET", "The ensemble edge is too small after model shrinkage."
+    else:
+        signal = "DRAGON" if probs["D"] > probs["T"] else "TIGER"
+        reason = f"{robust_count} model(s) passed the robustness gate and the ensemble margin is {margin:.1%}."
+label={"DRAGON":"🐉 DRAGON","TIGER":"🐯 TIGER","NO BET":"⚪ NO BET"}[signal]
+s1,s2,s3=st.columns(3)
+s1.metric("Recommendation",label); s2.metric("Dragon model",f"{probs['D']:.1%}"); s3.metric("Tiger model",f"{probs['T']:.1%}")
 st.info(reason)
-st.caption("This is a statistical research signal, not a guarantee that the next casino hand is predictable or winnable.")
+st.caption("Research signal only — historical patterns cannot guarantee the next casino outcome.")
+
+# Captured session registry
+st.divider()
+st.subheader("📚 Captured session registry")
+st.write("Completed totals directly visible in the supplied screenshots. V6 does not invent missing hand-by-hand sequences.")
+reg=KNOWN_SESSIONS.copy()
+reg["Dragon %"]=reg["Dragon"]/reg["Captured through"]; reg["Tiger %"]=reg["Tiger"]/reg["Captured through"]; reg["Tie %"]=reg["Tie"]/reg["Captured through"]
+rv=reg[["Provider","Game","Captured through","Dragon","Tiger","Tie","Dragon %","Tiger %","Tie %","Sequence available"]].copy()
+for c in ["Dragon %","Tiger %","Tie %"]: rv[c]=rv[c].map(lambda v:f"{v:.1%}")
+st.dataframe(rv,hide_index=True,use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # Road structure
@@ -465,25 +534,29 @@ if details:
     st.dataframe(md, hide_index=True, use_container_width=True)
 
 # -----------------------------------------------------------------------------
-# Walk-forward validation
+# Robust walk-forward validation
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🧪 Leakage-safe walk-forward validation")
-st.write("Each historical test uses only results that existed before that test point. No future result is used to create its own signal.")
-
-comparison = all_model_backtest(results)
-if not comparison.empty:
-    display = comparison.copy()
-    display["Accuracy"] = display["Accuracy"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-    display["Coverage"] = display["Coverage"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-    st.dataframe(display, hide_index=True, use_container_width=True)
-
-    valid = comparison.dropna(subset=["Accuracy"]).copy()
-    if not valid.empty:
-        best_row = valid.sort_values(["Accuracy", "Coverage"], ascending=False).iloc[0]
-        st.caption(f"Best historical rule by raw walk-forward accuracy: **{best_row['Model']}** ({best_row['Accuracy']:.1%} accuracy, {best_row['Coverage']:.1%} coverage). This ranking is descriptive and can change with new data.")
+st.subheader("🧪 V6 robust walk-forward validation")
+st.write("V6 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
+if not validation.empty:
+    display=validation.copy()
+    for c in ["Accuracy","Coverage","Wilson low","Wilson high"]: display[c]=display[c].map(lambda v:f"{v:.1%}" if pd.notna(v) else "—")
+    display["p-value"]=display["p-value"].map(lambda v:f"{v:.3f}" if pd.notna(v) else "—")
+    display["Robust"]=display["Robust"].map(lambda v:"PASS" if v else "—")
+    st.dataframe(display,hide_index=True,use_container_width=True)
+    rc=int(validation["Robust"].sum())
+    if rc: st.success(f"{rc} model(s) pass the V6 robustness gate.")
+    else: st.warning("No model passes the V6 robustness gate. V6 returns NO BET rather than promoting historical noise.")
 else:
-    st.warning("Not enough history for walk-forward comparison.")
+    st.warning("Not enough directional history for robust validation.")
+
+# Ensemble stability
+st.divider()
+st.subheader("🧠 Ensemble stability")
+if details:
+    md=pd.DataFrame(details); md["D"]=md["D"].map(lambda v:f"{v:.1%}"); md["T"]=md["T"].map(lambda v:f"{v:.1%}"); md["Weight"]=md["Weight"].map(lambda v:f"{v:.2f}"); md["Robust"]=md["Robust"].map(lambda v:"PASS" if v else "shrunk")
+    st.dataframe(md,hide_index=True,use_container_width=True)
 
 # -----------------------------------------------------------------------------
 # Pattern / n-gram inspection
@@ -524,6 +597,6 @@ st.divider()
 st.subheader("⬇️ Export this session")
 export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v5_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v6_session.csv", mime="text/csv")
 
-st.warning("Important: V5 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
+st.warning("Important: V6 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
