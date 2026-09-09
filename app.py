@@ -425,7 +425,7 @@ def v6_ensemble(results, validation):
 st.sidebar.header("V9 controls")
 mode = st.sidebar.radio(
     "History source",
-    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Paste D/T/Tie", "Upload CSV"],
+    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Verified aggregate sessions", "Paste D/T/Tie", "Upload CSV"],
     index=0,
 )
 
@@ -437,6 +437,28 @@ elif mode == "Verified Emperor Evolution #63":
     table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
     results = EMPEROR_EVOLUTION_63.copy()
     st.sidebar.success("Loaded verified Emperor #1–#63: D35 / T24 / Tie4.")
+elif mode == "Verified aggregate sessions":
+    ref = st.sidebar.selectbox(
+        "Verified session",
+        [
+            "Evolution Dragon Tiger — #102 (D54/T40/Tie8)",
+            "Pragmatic Play Live Dragon Tiger — #112 (D54/T49/Tie9)",
+        ],
+    )
+    if ref.startswith("Evolution"):
+        table_name = "Evolution Dragon Tiger — verified aggregate through #102"
+        d, t, x = 54, 40, 8
+    else:
+        table_name = "Pragmatic Play Live Dragon Tiger — verified aggregate through #112"
+        d, t, x = 54, 49, 9
+    st.subheader("📊 Verified aggregate record")
+    a,b,c,dcol = st.columns(4)
+    a.metric("Hands captured", d+t+x)
+    b.metric("Dragon", f"{d} ({d/(d+t+x):.1%})")
+    c.metric("Tiger", f"{t} ({t/(d+t+x):.1%})")
+    dcol.metric("Tie", f"{x} ({x/(d+t+x):.1%})")
+    st.info("This record is preserved exactly as verified from the supplied completed-session totals. Because the chronological hand order is not stored in the current V9 artifact, V9 does not invent a sequence or run sequence-based prediction on it.")
+    st.stop()
 elif mode == "Paste D/T/Tie":
     table_name = st.sidebar.text_input("Table / provider / session name", "Current Session")
     text = st.sidebar.text_area("Paste results, oldest → newest", "", height=180, placeholder="D T T D X D T ...")
@@ -519,7 +541,7 @@ st.caption("Research signal only — historical patterns cannot guarantee the ne
 # Captured session registry
 st.divider()
 st.subheader("📚 Captured session registry")
-st.write("Completed totals directly visible in the supplied screenshots. V6 does not invent missing hand-by-hand sequences.")
+st.write("Completed totals directly visible in the supplied screenshots. V9 does not invent missing hand-by-hand sequences.")
 reg=KNOWN_SESSIONS.copy()
 reg["Dragon %"]=reg["Dragon"]/reg["Captured through"]; reg["Tiger %"]=reg["Tiger"]/reg["Captured through"]; reg["Tie %"]=reg["Tie"]/reg["Captured through"]
 rv=reg[["Provider","Game","Captured through","Dragon","Tiger","Tie","Dragon %","Tiger %","Tie %","Sequence available"]].copy()
