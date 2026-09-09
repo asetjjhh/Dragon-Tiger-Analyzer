@@ -603,7 +603,7 @@ else:
 # Robust walk-forward validation
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🧪 V6 robust walk-forward validation")
+st.subheader("🧪 V9 robust walk-forward validation")
 st.write("V9 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
 if not validation.empty:
     display=validation.copy()
