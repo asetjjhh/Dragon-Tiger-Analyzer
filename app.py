@@ -1,562 +1,304 @@
 import re
 from collections import Counter
 from math import sqrt
+from io import StringIO
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(
-    page_title="Dragon Tiger Analyzer V2",
-    page_icon="🐉",
-    layout="wide",
-)
+st.set_page_config(page_title="Dragon Tiger Analyzer V3", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer")
-st.caption(
-    "V2 • Card-level history, rank/suit tracking and shoe-aware statistics. "
-    "Analytical tool — not a guaranteed prediction system."
-)
+st.title("🐉🐯 Dragon Tiger Analyzer — V3")
+st.caption("V3 • Separate tables/sessions, road engine, card/rank analysis, conditional testing and walk-forward validation.")
 
-RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
+# Locked project rule: Ace is always the lowest rank in this project.
+RANKS = ["A","2","3","4","5","6","7","8","9","10","J","Q","K"]
 RANK_VALUE = {r: i + 1 for i, r in enumerate(RANKS)}
-SUITS = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
+SUITS = {"S":"♠", "H":"♥", "D":"♦", "C":"♣"}
 
-def normalize_rank(token):
-    t = token.strip().upper()
-    aliases = {"ACE": "A", "JACK": "J", "QUEEN": "Q", "KING": "K"}
-    return aliases.get(t, t)
 
 def parse_card(token):
-    token = token.strip().upper()
-    if not token:
-        return None
-
-    # Accept AS, 10H, QD, or rank only (A, 10, Q).
+    token = str(token).strip().upper()
     m = re.fullmatch(r"(10|[2-9AJQK])([SHDC])?", token)
     if not m:
         return None
+    return {"rank": m.group(1), "suit": m.group(2)}
 
-    rank = normalize_rank(m.group(1))
-    suit = m.group(2)
-    return {"rank": rank, "suit": suit, "raw": token}
-
-def parse_card_lines(text):
-    # One card per line is the safest mobile format.
-    tokens = []
-    for line in text.replace(",", "\n").splitlines():
-        value = line.strip()
-        if value:
-            tokens.append(value)
-
-    cards = []
-    invalid = []
-    for token in tokens:
-        card = parse_card(token)
-        if card:
-            cards.append(card)
-        else:
-            invalid.append(token)
-    return cards, invalid
-
-def parse_results(text):
-    tokens = [
-        x.strip().upper()
-        for x in text.replace(",", " ").replace("\n", " ").split()
-    ]
-    mapping = {"DRAGON": "D", "TIGER": "T", "TIE": "X"}
-    out = []
-    for token in tokens:
-        token = mapping.get(token, token)
-        if token in {"D", "T", "X"}:
-            out.append(token)
-    return out
 
 def outcome_from_cards(dragon, tiger):
-    dv = RANK_VALUE[dragon["rank"]]
-    tv = RANK_VALUE[tiger["rank"]]
-    if dv > tv:
-        return "D"
-    if tv > dv:
-        return "T"
-    return "X"
+    dv, tv = RANK_VALUE[dragon["rank"]], RANK_VALUE[tiger["rank"]]
+    return "D" if dv > tv else "T" if tv > dv else "X"
 
-def streak_info(results):
-    if not results:
-        return "-", 0, 0, 0
 
-    cur = results[-1]
-    current = 0
-    for x in reversed(results):
-        if x == cur:
-            current += 1
-        else:
-            break
+def parse_result(x):
+    x = str(x).strip().upper()
+    return {"DRAGON":"D", "TIGER":"T", "TIE":"X"}.get(x, x if x in {"D","T","X"} else None)
 
-    dmax = tmax = 0
-    d = t = 0
-    for x in results:
-        if x == "D":
-            d += 1
-            t = 0
-        elif x == "T":
-            t += 1
-            d = 0
-        else:
-            d = t = 0
-        dmax = max(dmax, d)
-        tmax = max(tmax, t)
 
-    return cur, current, dmax, tmax
+def clean_df(df):
+    df = df.copy()
+    cols = {c.lower().strip(): c for c in df.columns}
+    if "outcome" not in cols:
+        return pd.DataFrame()
+    out = pd.DataFrame()
+    if "table" in cols:
+        out["Table"] = df[cols["table"]].astype(str)
+    elif "session" in cols:
+        out["Table"] = df[cols["session"]].astype(str)
+    else:
+        out["Table"] = "Table 1"
+    out["Hand"] = pd.to_numeric(df[cols["hand"]], errors="coerce") if "hand" in cols else np.arange(1, len(df)+1)
+    out["Outcome"] = df[cols["outcome"]].map(parse_result)
+    out["Dragon"] = df[cols["dragon"]].astype(str).str.upper() if "dragon" in cols else ""
+    out["Tiger"] = df[cols["tiger"]].astype(str).str.upper() if "tiger" in cols else ""
+    out = out[out["Outcome"].notna()].reset_index(drop=True)
+    return out
 
-def transition_stats(results):
-    seq = [x for x in results if x in ("D", "T")]
-    if len(seq) < 2:
-        return 0.0, 0, 0
-    transitions = len(seq) - 1
-    switches = sum(a != b for a, b in zip(seq, seq[1:]))
-    return switches / transitions, switches, transitions
 
-def conditional_probability(results, pattern):
-    seq = [x for x in results if x in ("D", "T")]
-    pattern = list(pattern)
-    hits = next_d = next_t = 0
+def road_grid(results, width=12):
+    vals = [x for x in results if x in ("D","T","X")]
+    if not vals:
+        return pd.DataFrame()
+    rows = (len(vals) + width - 1) // width
+    grid = [["" for _ in range(width)] for _ in range(rows)]
+    for i, v in enumerate(vals):
+        grid[i // width][i % width] = v
+    return pd.DataFrame(grid, columns=[str(i+1) for i in range(width)])
+
+
+def streaks(results):
+    best = {"D":0,"T":0,"X":0}
+    cur = {"D":0,"T":0,"X":0}
+    for r in results:
+        for k in cur: cur[k] = cur[k] + 1 if r == k else 0
+        for k in best: best[k] = max(best[k], cur[k])
+    current = results[-1] if results else "-"
+    current_n = 0
+    for r in reversed(results):
+        if r != current: break
+        current_n += 1
+    return current, current_n, best
+
+
+def transition_matrix(results):
+    seq = [x for x in results if x in ("D","T")]
+    mat = pd.DataFrame(0, index=["D","T"], columns=["D","T"])
+    for a,b in zip(seq, seq[1:]): mat.loc[a,b] += 1
+    return mat
+
+
+def conditional(results, pattern):
+    seq = [x for x in results if x in ("D","T")]
     L = len(pattern)
-
-    if not pattern or len(seq) <= L:
-        return 0, 0, 0
-
-    for i in range(len(seq) - L):
-        if seq[i:i + L] == pattern:
+    hits = d = t = 0
+    for i in range(len(seq)-L):
+        if "".join(seq[i:i+L]) == pattern:
             hits += 1
-            if seq[i + L] == "D":
-                next_d += 1
-            elif seq[i + L] == "T":
-                next_t += 1
+            if seq[i+L] == "D": d += 1
+            else: t += 1
+    return hits, d, t
 
-    return hits, next_d, next_t
 
-def two_sided_z(obs, expected, n):
-    if n == 0 or expected <= 0 or expected >= 1:
-        return np.nan
-    return (obs - expected) / sqrt(expected * (1 - expected) / n)
+def wilson_lower(p, n, z=1.96):
+    if n == 0: return 0.0
+    den = 1 + z*z/n
+    centre = p + z*z/(2*n)
+    adj = z*sqrt((p*(1-p)+z*z/(4*n))/n)
+    return (centre-adj)/den
 
-def exact_shoe_probabilities(cards, decks):
-    """Conditional next-hand probabilities from known remaining cards.
 
-    Valid only when the shoe composition is known and cards include suits.
+def walk_forward(results, window=20, threshold=0.60, min_signal_n=10):
+    """Backtest a deliberately simple, pre-declared recent-majority rule.
+    It predicts only D/T; ties are scored separately as non-directional.
+    No future information is used.
     """
-    total = 52 * decks
-    if len(cards) >= total:
-        return {"D": 0.0, "T": 0.0, "X": 0.0, "remaining": 0}
+    seq = [x for x in results if x in ("D","T")]
+    rows=[]
+    for i in range(min_signal_n, len(seq)):
+        hist = seq[max(0,i-window):i]
+        if len(hist) < min_signal_n: continue
+        share = hist.count("D")/len(hist)
+        if share >= threshold: signal="D"
+        elif share <= 1-threshold: signal="T"
+        else: signal="LEAVE"
+        actual=seq[i]
+        correct = signal in ("D","T") and signal == actual
+        rows.append({"Test index":i+1,"History n":len(hist),"Dragon share":share,"Signal":signal,"Actual":actual,"Correct":correct if signal!="LEAVE" else np.nan})
+    return pd.DataFrame(rows)
 
-    known = Counter((c["rank"], c["suit"]) for c in cards)
-    rank_remaining = {rank: 4 * decks for rank in RANKS}
 
-    for (rank, suit), count in known.items():
-        if suit in SUITS:
-            rank_remaining[rank] -= count
+def z_score(p, expected, n):
+    if n <= 0 or expected <= 0 or expected >= 1: return np.nan
+    return (p-expected)/sqrt(expected*(1-expected)/n)
 
-    remaining = sum(rank_remaining.values())
-    if remaining < 2:
-        return {"D": 0.0, "T": 0.0, "X": 0.0, "remaining": remaining}
+# ---------------- Sidebar ----------------
+st.sidebar.header("V3 controls")
+st.sidebar.info("Project rule: Ace = 1 (lowest). This setting is intentionally locked.")
 
-    d = t = x = 0.0
-    for dr in RANKS:
-        for tr in RANKS:
-            ways = rank_remaining[dr] * rank_remaining[tr]
-            if dr == tr:
-                ways -= rank_remaining[dr]
-            ways = max(0, ways)
-            if RANK_VALUE[dr] > RANK_VALUE[tr]:
-                d += ways
-            elif RANK_VALUE[tr] > RANK_VALUE[dr]:
-                t += ways
-            else:
-                x += ways
+upload = st.sidebar.file_uploader("Optional CSV history", type=["csv"])
+manual = st.sidebar.text_area("Quick results (D/T/X), oldest → newest", "", height=120)
+window = st.sidebar.selectbox("Recent window", [10,20,30,50,100], index=1)
+pattern = st.sidebar.text_input("Conditional pattern", "TTT").replace(" ", "").upper()
 
-    denom = remaining * (remaining - 1)
-    return {
-        "D": d / denom,
-        "T": t / denom,
-        "X": x / denom,
-        "remaining": remaining,
-    }
-
-def card_key(card):
-    return (card["rank"], card["suit"])
-
-def card_label(card):
-    return f'{card["rank"]}{card["suit"] or ""}'
-
-# ---------- sidebar ----------
-st.sidebar.header("V2 data input")
-mode = st.sidebar.radio(
-    "Input mode",
-    ["Card-level", "Quick result"],
-    index=0,
-)
-
-decks = st.sidebar.selectbox(
-    "Deck model for shoe tracking",
-    [1, 2, 4, 6, 8],
-    index=4,
-    help="Use this only when the table really uses a fixed shoe with the selected number of decks.",
-)
-
-recent_window = st.sidebar.selectbox("Recent window", [10, 20, 30, 50], index=1)
-pattern = (
-    st.sidebar.text_input("Conditional pattern", "TTT")
-    .strip()
-    .upper()
-    .replace(" ", "")
-)
-
-card_history = []
-results = []
-invalid = []
-card_mode_ready = False
-
-if mode == "Card-level":
-    st.sidebar.markdown(
-        "**Mobile format:** enter one card per line, oldest → newest."
-    )
-    dragon_text = st.sidebar.text_area(
-        "Dragon cards",
-        value="AS\n7H\n10D\nKC\n5S\n9H",
-        height=180,
-        help="Examples: AS, 10H, QD, K. Suits are S/H/D/C. Rank-only cards are allowed, but exact shoe tracking needs suits.",
-    )
-    tiger_text = st.sidebar.text_area(
-        "Tiger cards",
-        value="7C\n9D\n10C\n4H\nQS\n2D",
-        height=180,
-        help="Enter the same number of Tiger cards as Dragon cards.",
-    )
-
-    dragon_cards, dragon_invalid = parse_card_lines(dragon_text)
-    tiger_cards, tiger_invalid = parse_card_lines(tiger_text)
-    invalid = dragon_invalid + tiger_invalid
-
-    if dragon_invalid:
-        st.sidebar.error(f"Invalid Dragon card(s): {', '.join(dragon_invalid)}")
-    if tiger_invalid:
-        st.sidebar.error(f"Invalid Tiger card(s): {', '.join(tiger_invalid)}")
-
-    if len(dragon_cards) != len(tiger_cards):
-        st.warning(
-            f"Dragon has {len(dragon_cards)} parsed card(s), while Tiger has "
-            f"{len(tiger_cards)}. Enter one Dragon and one Tiger card for every hand."
-        )
-    elif dragon_cards and not invalid:
-        card_mode_ready = True
-        for i, (dragon, tiger) in enumerate(zip(dragon_cards, tiger_cards), start=1):
-            card_history.append(
-                {
-                    "Hand": i,
-                    "Dragon": card_label(dragon),
-                    "Tiger": card_label(tiger),
-                    "Dragon value": RANK_VALUE[dragon["rank"]],
-                    "Tiger value": RANK_VALUE[tiger["rank"]],
-                    "Outcome": outcome_from_cards(dragon, tiger),
-                    "Suited Tie": (
-                        outcome_from_cards(dragon, tiger) == "X"
-                        and dragon["suit"] is not None
-                        and tiger["suit"] is not None
-                        and dragon["suit"] == tiger["suit"]
-                    ),
-                }
-            )
-        results = [row["Outcome"] for row in card_history]
-
+if upload is not None:
+    try:
+        raw_df = pd.read_csv(upload)
+        data = clean_df(raw_df)
+        if data.empty: st.error("CSV must contain an Outcome column. Optional columns: Table, Hand, Dragon, Tiger.")
+    except Exception as e:
+        st.error(f"Could not read CSV: {e}")
+        data = pd.DataFrame()
 else:
-    raw = st.sidebar.text_area(
-        "Enter results oldest → newest",
-        value="D T D D T T D T D D T T D T D",
-        height=180,
-        help="Use D = Dragon, T = Tiger, X = Tie. Dragon/Tiger/Tie also work.",
-    )
-    results = parse_results(raw)
+    vals = [parse_result(x) for x in re.split(r"[\s,;]+", manual.strip()) if x.strip()]
+    vals = [x for x in vals if x]
+    data = pd.DataFrame({"Table":"Current Session", "Hand":range(1,len(vals)+1), "Outcome":vals, "Dragon":"", "Tiger":""})
 
-if not results:
-    st.info("Enter at least one hand to start the analysis.")
+if data.empty:
+    st.info("Start with a CSV or paste D/T/X results. V3 can analyze multiple tables independently when the CSV has a Table column.")
     st.stop()
 
-# ---------- summary ----------
-counts = pd.Series(results).value_counts()
-d = int(counts.get("D", 0))
-t = int(counts.get("T", 0))
-x = int(counts.get("X", 0))
+# ---------------- Table selector ----------------
+tables = list(data["Table"].dropna().astype(str).unique())
+selected = st.sidebar.selectbox("Table / session", tables)
+tab = data[data["Table"].astype(str) == str(selected)].copy().reset_index(drop=True)
+results = tab["Outcome"].tolist()
+
+# ---------------- Summary ----------------
+counts = Counter(results)
+d,t,x = counts.get("D",0), counts.get("T",0), counts.get("X",0)
 n = len(results)
+cur, cur_n, best = streaks(results)
+recent = results[-min(window,n):]
+non_tie = [r for r in recent if r in ("D","T")]
 
-recent = results[-min(recent_window, n):]
-rd = recent.count("D")
-rt = recent.count("T")
-rx = recent.count("X")
-
-cur, cur_n, dmax, tmax = streak_info(results)
-switch_rate, switches, transitions = transition_stats(results)
-
-c1, c2, c3, c4, c5 = st.columns(5)
+c1,c2,c3,c4,c5 = st.columns(5)
 c1.metric("Hands", n)
 c2.metric("Dragon", f"{d/n:.1%}")
 c3.metric("Tiger", f"{t/n:.1%}")
 c4.metric("Tie", f"{x/n:.1%}")
-c5.metric("Current", f"{cur} × {cur_n}")
+c5.metric("Current streak", f"{cur} × {cur_n}")
 
-# ---------- card-level panel ----------
-if mode == "Card-level" and card_mode_ready:
-    st.divider()
-    st.subheader("🃏 Card-level history")
+st.caption(f"Selected table/session: **{selected}**")
 
-    card_df = pd.DataFrame(card_history)
-    st.dataframe(
-        card_df[["Hand", "Dragon", "Tiger", "Dragon value", "Tiger value", "Outcome", "Suited Tie"]],
-        hide_index=True,
-        use_container_width=True,
-    )
+# ---------------- Road engine ----------------nst.divider()
+st.subheader("🛣️ Road / sequence engine")
+st.dataframe(road_grid(results), hide_index=True, use_container_width=True)
 
-    suited_ties = int(card_df["Suited Tie"].sum())
-    exact_suited_rate = suited_ties / n if n else 0
+seq = [r for r in results if r in ("D","T")]
+switches = sum(a != b for a,b in zip(seq,seq[1:]))
+transitions = max(0,len(seq)-1)
+st.write(f"D/T-only switch rate: **{switches/transitions:.1%}** ({switches}/{transitions})" if transitions else "Not enough D/T results for switch-rate analysis.")
 
-    a, b, c, dcol = st.columns(4)
-    a.metric("Known cards", 2 * n)
-    b.metric("Suited Ties", suited_ties)
-    c.metric("Suited Tie rate", f"{exact_suited_rate:.2%}")
-    dcol.metric("Unique exact cards", card_df.shape[0] * 2)
+m1,m2 = st.columns(2)
+with m1:
+    st.write(f"Longest Dragon streak: **{best['D']}**")
+    st.write(f"Longest Tiger streak: **{best['T']}**")
+with m2:
+    st.write(f"Longest Tie streak: **{best['X']}**")
+    st.write("Recent sequence: **" + " ".join(recent) + "**")
 
-    # Duplicate check: an exact card can appear at most `decks` times in a fixed multi-deck shoe.
-    all_cards = []
-    for row in card_history:
-        all_cards.append(row["Dragon"])
-        all_cards.append(row["Tiger"])
+st.markdown("**D/T transition counts**")
+st.dataframe(transition_matrix(results), use_container_width=True)
 
-    parsed_all = []
-    for token in all_cards:
-        card = parse_card(token)
-        if card and card["suit"]:
-            parsed_all.append(card)
-
-    if len(parsed_all) == 2 * n:
-        exact_counts = Counter(card_key(c) for c in parsed_all)
-        impossible = {
-            f"{r}{s}": count
-            for (r, s), count in exact_counts.items()
-            if count > decks
-        }
-        if impossible:
-            st.error(
-                "Exact-card count exceeds the selected deck model: "
-                + ", ".join(f"{k} × {v}" for k, v in impossible.items())
-            )
-        else:
-            st.success(
-                f"Exact suited-card tracking is internally consistent with a {decks}-deck model."
-            )
-    else:
-        st.info(
-            "Some cards do not include suits. Rank analysis still works, but exact shoe depletion "
-            "cannot be fully verified."
-        )
-
-    # Rank distribution
-    rank_rows = []
-    for rank in RANKS:
-        rank_rows.append(
-            {
-                "Rank": rank,
-                "Dragon": sum(c["rank"] == rank for c in dragon_cards),
-                "Tiger": sum(c["rank"] == rank for c in tiger_cards),
-                "Total": sum(c["rank"] == rank for c in dragon_cards + tiger_cards),
-            }
-        )
-    st.markdown("**Observed rank distribution**")
-    st.dataframe(pd.DataFrame(rank_rows), hide_index=True, use_container_width=True)
-
-    # Shoe-aware probabilities require every entered card to have a suit.
-    all_input_cards = dragon_cards + tiger_cards
-    full_suits = all(c["suit"] is not None for c in all_input_cards)
-    if full_suits:
-        shoe = exact_shoe_probabilities(all_input_cards, decks)
-        st.markdown("### 🧮 Known-shoe next-hand baseline")
-        st.caption(
-            "This is a mathematical conditional baseline only if the selected fixed shoe, "
-            "deck count and all removed cards are known. It is not a prediction guarantee."
-        )
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Remaining cards", shoe["remaining"])
-        p2.metric("Dragon", f'{shoe["D"]:.2%}')
-        p3.metric("Tiger", f'{shoe["T"]:.2%}')
-        p4.metric("Tie", f'{shoe["X"]:.2%}')
-    else:
-        st.info(
-            "Add suits to every card (for example AS, 10H, QC) to unlock exact known-shoe "
-            "depletion probabilities."
-        )
-
-# ---------- descriptive stats ----------
+# ---------------- Recent + baseline ----------------
 st.divider()
-left, right = st.columns(2)
+a,b = st.columns(2)
+with a:
+    st.subheader(f"📊 Recent {len(recent)}")
+    rc = Counter(recent)
+    st.dataframe(pd.DataFrame({"Outcome":["D","T","X"],"Count":[rc['D'],rc['T'],rc['X']],"Share":[rc['D']/len(recent),rc['T']/len(recent),rc['X']/len(recent)]}).assign(Share=lambda q:q.Share.map(lambda z:f"{z:.2%}")), hide_index=True, use_container_width=True)
+with b:
+    st.subheader("⚖️ 50/50 non-Tie check")
+    nt = d+t
+    if nt:
+        share=d/nt
+        z=z_score(share,0.5,nt)
+        st.metric("Dragon share among non-Ties",f"{share:.2%}")
+        st.write(f"Approximate z-score: **{z:.2f}**")
+        st.caption("This tests historical imbalance; it does not prove the next hand is predictable.")
+    else: st.info("No non-Tie hands yet.")
 
-with left:
-    st.subheader("📊 Historical statistics")
-    stats = pd.DataFrame(
-        {
-            "Outcome": ["Dragon", "Tiger", "Tie"],
-            "Count": [d, t, x],
-            "Observed %": [d / n, t / n, x / n],
-        }
-    )
-    stats["Observed %"] = stats["Observed %"].map(lambda v: f"{v:.2%}")
-    st.dataframe(stats, hide_index=True, use_container_width=True)
-
-    st.write(f"Longest Dragon streak: **{dmax}**")
-    st.write(f"Longest Tiger streak: **{tmax}**")
-    st.write(
-        f"Alternation/switch rate (D/T only): **{switch_rate:.2%}** "
-        f"({switches}/{transitions} transitions)"
-    )
-
-with right:
-    st.subheader(f"🔎 Recent {len(recent)} hands")
-    rstats = pd.DataFrame(
-        {
-            "Outcome": ["Dragon", "Tiger", "Tie"],
-            "Count": [rd, rt, rx],
-            "Observed %": [
-                rd / len(recent),
-                rt / len(recent),
-                rx / len(recent),
-            ],
-        }
-    )
-    rstats["Observed %"] = rstats["Observed %"].map(lambda v: f"{v:.2%}")
-    st.dataframe(rstats, hide_index=True, use_container_width=True)
-    st.write("Recent sequence:")
-    st.code(" ".join(recent))
-
-# ---------- current card details ----------
-if mode == "Card-level" and card_mode_ready:
-    st.divider()
-    latest = card_history[-1]
-    st.subheader("🎴 Latest hand")
-    q1, q2, q3 = st.columns(3)
-    q1.metric("Dragon card", latest["Dragon"])
-    q2.metric("Tiger card", latest["Tiger"])
-    q3.metric("Result", latest["Outcome"])
-    if latest["Suited Tie"]:
-        st.success("♠♥♦♣ This hand is a suited Tie (same rank + same suit).")
-
-# ---------- conditional probability ----------
+# ---------------- Conditional ----------------
 st.divider()
-st.subheader("🧮 Conditional pattern analysis")
-
-if pattern and all(ch in "DT" for ch in pattern):
-    hits, next_d, next_t = conditional_probability(results, pattern)
+st.subheader("🧮 Conditional pattern testing")
+if pattern and all(c in "DT" for c in pattern):
+    hits,nd,nt = conditional(results,pattern)
     if hits:
-        st.write(f"After **{pattern}**, the next result was observed **{hits}** time(s).")
-        a, b, c = st.columns(3)
-        a.metric("Next Dragon", f"{next_d / hits:.1%}")
-        b.metric("Next Tiger", f"{next_t / hits:.1%}")
-        c.metric("Occurrences", hits)
-        st.info(
-            "Historical conditional frequency is not the same as a true probability "
-            "for the next casino hand."
-        )
+        st.write(f"Pattern **{pattern}** occurred **{hits}** time(s) with a following D/T result.")
+        q1,q2,q3=st.columns(3)
+        q1.metric("Next Dragon",f"{nd/hits:.1%}")
+        q2.metric("Next Tiger",f"{nt/hits:.1%}")
+        q3.metric("Occurrences",hits)
+        if hits < 20: st.warning("Small sample: treat this as descriptive only.")
+    else: st.warning("Pattern has no qualifying historical occurrences in this table/session.")
+else: st.warning("Use only D and T in the pattern, e.g. TT, DTD, TTT.")
+
+# ---------------- Card/rank engine ----------------nst.divider()
+st.subheader("🃏 Card / rank engine")
+card_rows=[]
+for _,row in tab.iterrows():
+    dc=parse_card(row.get("Dragon",""))
+    tc=parse_card(row.get("Tiger",""))
+    if dc and tc:
+        derived=outcome_from_cards(dc,tc)
+        card_rows.append({"Hand":row["Hand"],"Dragon":row["Dragon"],"Tiger":row["Tiger"],"D value":RANK_VALUE[dc['rank']],"T value":RANK_VALUE[tc['rank']],"Derived":derived,"Recorded":row["Outcome"],"Match":derived==row["Outcome"],"Suited Tie":derived=="X" and dc['suit'] and dc['suit']==tc['suit']})
+if card_rows:
+    cdf=pd.DataFrame(card_rows)
+    st.dataframe(cdf, hide_index=True, use_container_width=True)
+    mismatches=int((~cdf["Match"]).sum())
+    if mismatches:
+        st.error(f"{mismatches} card/result mismatch(es). Check the recorded result and table rules before using rank-derived analysis.")
     else:
-        st.warning(
-            "That pattern has not occurred enough in the entered data to estimate "
-            "a conditional frequency."
-        )
+        st.success("All entered card-derived outcomes match the recorded outcomes under Ace = 1.")
+    st.write("**Rank distribution**")
+    ranks=[]
+    for r in RANKS:
+        ranks.append({"Rank":r,"Dragon":sum(parse_card(x).get('rank')==r for x in tab['Dragon'] if parse_card(x)),"Tiger":sum(parse_card(x).get('rank')==r for x in tab['Tiger'] if parse_card(x))})
+    st.dataframe(pd.DataFrame(ranks),hide_index=True,use_container_width=True)
 else:
-    st.warning("Pattern must contain only D and T, e.g. D, TT, DTD, or TTT.")
+    st.info("Add Dragon/Tiger cards in the CSV to activate card-level validation and rank analysis.")
 
-# ---------- baseline comparison ----------
-st.divider()
-st.subheader("⚖️ Baseline comparison")
+# ---------------- Walk-forward ----------------nst.divider()
+st.subheader("🧪 Walk-forward validation")
+st.caption("V3 tests a pre-declared recent-majority rule only on outcomes that occur after the historical window. It never uses future hands to create the signal.")
+wf_window = st.selectbox("Backtest history window", [10,20,30,50], index=1, key="wfwin")
+wf = walk_forward(results, window=wf_window, threshold=0.60, min_signal_n=10)
+if wf.empty:
+    st.warning("Not enough historical D/T data for walk-forward testing. Keep collecting complete histories naturally; do not force extra data just for the app.")
+else:
+    actionable=wf[wf.Signal.isin(["D","T"])].copy()
+    leave_rate=(wf.Signal=="LEAVE").mean()
+    b1,b2,b3,b4=st.columns(4)
+    b1.metric("Test points",len(wf))
+    b2.metric("LEAVE rate",f"{leave_rate:.1%}")
+    b3.metric("Actionable points",len(actionable))
+    if len(actionable):
+        acc=actionable.Correct.mean()
+        b4.metric("Actionable hit rate",f"{acc:.1%}")
+        st.write(f"Wilson 95% lower bound: **{wilson_lower(acc,len(actionable)):.1%}**")
+    st.dataframe(wf.tail(100), hide_index=True, use_container_width=True)
+    st.warning("A backtest result is not evidence of a guaranteed edge. It can be unstable, overfit, or produced by chance.")
 
-st.write(
-    "Dragon and Tiger are symmetric in the standard game. This screen uses a "
-    "50/50 non-Tie comparison for descriptive testing. Exact table rules, payouts "
-    "and variants should be configured separately."
-)
-
-non_tie = d + t
-if non_tie:
-    d_non_tie = d / non_tie
-    z = two_sided_z(d_non_tie, 0.5, non_tie)
-    st.metric("Observed Dragon share among non-Ties", f"{d_non_tie:.2%}")
-    if np.isfinite(z):
-        st.write(f"Approximate z-score vs 50/50: **{z:.2f}**")
-    st.caption(
-        "A z-score alone does not establish predictive ability. Multiple testing "
-        "and small samples can produce false discoveries."
-    )
-
-# ---------- signal ----------
-st.divider()
-st.subheader("🎯 Transparent analytical signal")
-
-recent_non_tie = [q for q in recent if q in ("D", "T")]
-if len(recent_non_tie) >= 10:
-    rd_nt = recent_non_tie.count("D") / len(recent_non_tie)
-    if rd_nt >= 0.60:
-        signal = "🐉 DRAGON LEAN"
-        reason = f"Recent non-Tie sample is Dragon-heavy ({rd_nt:.1%})."
-    elif rd_nt <= 0.40:
-        signal = "🐯 TIGER LEAN"
-        reason = f"Recent non-Tie sample is Tiger-heavy ({1-rd_nt:.1%})."
+# ---------------- Signal ----------------nst.divider()
+st.subheader("🎯 Conservative analytical state")
+if len(non_tie) < 10:
+    signal="⚪ LEAVE"
+    reason=f"Only {len(non_tie)} recent non-Tie results; minimum sample not met."
+else:
+    share=non_tie.count("D")/len(non_tie)
+    if share>=0.60:
+        signal="🐉 DRAGON LEAN"; reason=f"Recent non-Tie sample is Dragon-heavy ({share:.1%})."
+    elif share<=0.40:
+        signal="🐯 TIGER LEAN"; reason=f"Recent non-Tie sample is Tiger-heavy ({1-share:.1%})."
     else:
-        signal = "⚪ LEAVE"
-        reason = f"Recent non-Tie sample is near balanced ({rd_nt:.1%} Dragon)."
-else:
-    signal = "⚪ LEAVE"
-    reason = "Fewer than 10 recent non-Tie outcomes."
-
+        signal="⚪ LEAVE"; reason=f"Recent non-Tie sample is near balanced ({share:.1%} Dragon)."
 st.markdown(f"## {signal}")
 st.write(reason)
-st.warning(
-    "This signal is intentionally descriptive. It is NOT a claim that the next "
-    "hand has that percentage chance of winning and does not overcome casino house edge."
-)
+st.caption("This is a descriptive research state, not a claim that the next casino hand can be predicted reliably.")
 
-# ---------- export ----------
-st.divider()
-st.subheader("💾 Export data")
+# ---------------- Export ----------------nst.divider()
+st.subheader("📥 Export")
+st.download_button("Download selected table CSV", tab.to_csv(index=False).encode("utf-8"), file_name=f"dragon_tiger_{str(selected).replace(' ','_')}.csv", mime="text/csv")
 
-if mode == "Card-level" and card_mode_ready:
-    export_df = pd.DataFrame(card_history)
-    export_name = "dragon_tiger_card_history_v2.csv"
-else:
-    export_df = pd.DataFrame({"hand": range(1, n + 1), "result": results})
-    export_name = "dragon_tiger_results_v2.csv"
-
-st.download_button(
-    "Download CSV",
-    export_df.to_csv(index=False).encode("utf-8"),
-    export_name,
-    "text/csv",
-)
-
-with st.expander("V2 developer notes"):
-    st.write(
-        """
-V2 additions:
-- Actual Dragon/Tiger card input
-- Rank and suit parsing
-- Result derived automatically from card ranks
-- Suited-Tie detection
-- Exact-card duplicate validation for a selected fixed deck model
-- Rank distribution table
-- Known-shoe conditional baseline when every suit is known
-- Card-level CSV export
-
-Next:
-V3 = road/chart engine
-V4 = backtesting
-V5 = statistical validation
-V6 = model comparison and calibration
-V7 = persistent database/dashboard
-V8 = screenshot/OCR-assisted entry
-"""
-    )
+st.success("V3 loaded successfully. Keep different tables/sessions separate; use larger histories for validation rather than assuming short patterns predict the next hand.")
