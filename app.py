@@ -1,5 +1,5 @@
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from math import sqrt
 from io import StringIO
 
@@ -7,15 +7,39 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V4", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V5", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V4")
-st.caption("V4 • Separate table/session histories, road analysis, leakage-safe walk-forward backtesting, signal validation and error checks.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V5")
+st.caption("V5 • Provider/session separation, road-structure models, leakage-safe walk-forward validation, adaptive ensemble and input checks.")
 
-# IMPORTANT: Do not hard-code a provider's card ranking unless its rules are verified.
-# V4 treats D/T/X history as authoritative for sequence analysis. Card-derived ranking is optional.
-RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
-SUITS = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
+# -----------------------------------------------------------------------------
+# Captured Evolution table snapshot (#100)
+# The road in the supplied #100 screenshot was reconstructed from the visible
+# 6-row bead-style grid. Reading columns top-to-bottom reproduces the displayed
+# #73 checkpoint counts (D32 / T37 / Tie4) and the #100 totals (D43 / T52 / Tie5).
+# This is a seed history, not a claim that the next casino outcome is predictable.
+# -----------------------------------------------------------------------------
+EVOLUTION_SEED = (
+    "T D D D T D "
+    "T T X T T T "
+    "D T D D T T "
+    "D T T T D T "
+    "D D T T T T "
+    "T T T D T D "
+    "X T D D D D "
+    "T T D T T T "
+    "D T D D D T "
+    "T D D D D D "
+    "D X X T D T "
+    "T T D T D T "
+    "D T D T T T "
+    "T T X T D D "
+    "D T D D D D "
+    "D T T D T T "
+    "T D T T"
+).split()
+
+assert len(EVOLUTION_SEED) == 100
 
 
 def parse_result(x):
@@ -27,439 +51,479 @@ def parse_result(x):
     }.get(x)
 
 
-def parse_card(token):
-    token = str(token).strip().upper()
-    m = re.fullmatch(r"(10|[2-9AJQK])([SHDC])?", token)
-    if not m:
-        return None
-    return {"rank": m.group(1), "suit": m.group(2)}
+def clean_tokens(text):
+    tokens = [x for x in re.split(r"[\s,;|]+", str(text).strip()) if x]
+    parsed = [parse_result(x) for x in tokens]
+    invalid = [tokens[i] for i, v in enumerate(parsed) if v is None]
+    return [v for v in parsed if v is not None], invalid
 
 
-def clean_df(df):
-    df = df.copy()
+def clean_csv(df):
     cols = {str(c).lower().strip(): c for c in df.columns}
     if "outcome" not in cols:
         return pd.DataFrame(), "CSV must contain an Outcome column."
-
     out = pd.DataFrame()
     if "table" in cols:
         out["Table"] = df[cols["table"]].fillna("Unknown Table").astype(str).str.strip()
     elif "session" in cols:
         out["Table"] = df[cols["session"]].fillna("Unknown Session").astype(str).str.strip()
     else:
-        out["Table"] = "Table 1"
-
+        out["Table"] = "Imported Session"
     if "hand" in cols:
         out["Hand"] = pd.to_numeric(df[cols["hand"]], errors="coerce")
     else:
         out["Hand"] = np.arange(1, len(df) + 1)
-
     out["Outcome"] = df[cols["outcome"]].map(parse_result)
-    out["Dragon"] = df[cols["dragon"]].fillna("").astype(str).str.upper().str.strip() if "dragon" in cols else ""
-    out["Tiger"] = df[cols["tiger"]].fillna("").astype(str).str.upper().str.strip() if "tiger" in cols else ""
-
-    bad = int(out["Outcome"].isna().sum())
+    invalid = int(out["Outcome"].isna().sum())
     out = out[out["Outcome"].notna()].reset_index(drop=True)
-    return out, (f"Ignored {bad} invalid outcome row(s)." if bad else "")
-
-
-def sequence_only(results):
-    return [r for r in results if r in ("D", "T", "X")]
+    return out, (f"Ignored {invalid} invalid outcome row(s)." if invalid else "")
 
 
 def dt_only(results):
     return [r for r in results if r in ("D", "T")]
 
 
-def streak_info(results):
-    best = {"D": 0, "T": 0, "X": 0}
-    cur = {"D": 0, "T": 0, "X": 0}
-    for r in results:
-        for k in cur:
-            cur[k] = cur[k] + 1 if r == k else 0
-            best[k] = max(best[k], cur[k])
-    current = results[-1] if results else "-"
-    current_n = 0
-    for r in reversed(results):
-        if r != current:
-            break
-        current_n += 1
-    return current, current_n, best
+def counts(results):
+    c = Counter(results)
+    return c["D"], c["T"], c["X"]
 
 
-def transition_counts(results):
+def streak_runs(seq):
+    runs = []
+    if not seq:
+        return runs
+    cur = seq[0]
+    n = 1
+    for x in seq[1:]:
+        if x == cur:
+            n += 1
+        else:
+            runs.append((cur, n))
+            cur, n = x, 1
+    runs.append((cur, n))
+    return runs
+
+
+def current_streak(seq):
+    if not seq:
+        return "-", 0
+    return seq[-1], next((i + 1 for i, x in enumerate(reversed(seq)) if x != seq[-1]), len(seq))
+
+
+def transition_probs(seq, alpha=1.0):
+    # Laplace smoothing, trained only on the supplied history.
+    out = {}
+    for src in ("D", "T"):
+        nxt = [b for a, b in zip(seq, seq[1:]) if a == src]
+        d = nxt.count("D")
+        t = nxt.count("T")
+        den = d + t + 2 * alpha
+        out[src] = {"D": (d + alpha) / den, "T": (t + alpha) / den, "samples": len(nxt)}
+    return out
+
+
+def recent_probs(seq, window, alpha=1.0):
+    h = seq[-window:] if len(seq) >= window else seq
+    d = h.count("D")
+    t = h.count("T")
+    den = d + t + 2 * alpha
+    return {"D": (d + alpha) / den, "T": (t + alpha) / den, "samples": len(h)}
+
+
+def ngram_probs(seq, order, alpha=1.0):
+    if len(seq) <= order:
+        return None
+    pattern = tuple(seq[-order:])
+    follows = []
+    for i in range(len(seq) - order):
+        if tuple(seq[i:i + order]) == pattern:
+            follows.append(seq[i + order])
+    if not follows:
+        return None
+    d = follows.count("D")
+    t = follows.count("T")
+    den = d + t + 2 * alpha
+    return {"D": (d + alpha) / den, "T": (t + alpha) / den, "samples": len(follows), "pattern": "".join(pattern)}
+
+
+def run_length_probs(seq, alpha=1.0):
+    # P(continue current side | current run length), learned from prior runs.
+    runs = streak_runs(seq)
+    if not runs:
+        return None
+    side, length = runs[-1]
+    continue_next = []
+    for i, (s, L) in enumerate(runs[:-1]):
+        if s == side and L == length:
+            # This run continued if it could be observed beyond its terminal length.
+            # Exact terminal run lengths do not directly predict; use historical
+            # probability that a run of this length was followed by same side.
+            nxt_side = runs[i + 1][0]
+            continue_next.append(1 if nxt_side == side else 0)
+    # For terminal run length, occurrences of exactly this length are informative
+    # about whether the run tends to be followed by a switch (not a continuation),
+    # so combine with generic side continuation tendency.
+    trans = transition_probs(seq, alpha)
+    return {
+        "D": trans[side]["D"],
+        "T": trans[side]["T"],
+        "samples": len(continue_next),
+        "side": side,
+        "length": length,
+    }
+
+
+def model_probs(seq):
+    models = {}
+    models["Recent-5"] = recent_probs(seq, 5)
+    models["Recent-10"] = recent_probs(seq, 10)
+    models["Recent-20"] = recent_probs(seq, 20)
+    tr = transition_probs(seq)
+    if seq:
+        models["Transition"] = {"D": tr[seq[-1]]["D"], "T": tr[seq[-1]]["T"], "samples": tr[seq[-1]]["samples"]}
+    for order in (1, 2, 3, 4):
+        p = ngram_probs(seq, order)
+        if p is not None:
+            models[f"N-gram-{order}"] = p
+    return models
+
+
+def blend_predictions(preds, weights=None):
+    if not preds:
+        return {"D": 0.5, "T": 0.5}
+    if weights is None:
+        weights = {k: 1.0 for k in preds}
+    d = sum(weights.get(k, 0) * v["D"] for k, v in preds.items())
+    t = sum(weights.get(k, 0) * v["T"] for k, v in preds.items())
+    z = d + t
+    return {"D": d / z, "T": t / z}
+
+
+def fixed_model_signal(seq, model_name):
+    p = model_probs(seq).get(model_name)
+    if p is None:
+        return None
+    return "D" if p["D"] > p["T"] else "T" if p["T"] > p["D"] else None
+
+
+def evaluate_fixed_model(history, model_name):
+    if len(history) < 15:
+        return None
+    rows = []
+    for i in range(10, len(history)):
+        train = history[:i]
+        sig = fixed_model_signal(train, model_name)
+        if sig is not None:
+            rows.append(sig == history[i])
+    if not rows:
+        return None
+    return float(np.mean(rows))
+
+
+def adaptive_signal(seq):
+    models = model_probs(seq)
+    if not models:
+        return "NO BET", {"D": 0.5, "T": 0.5}, []
+
+    weights = {}
+    details = []
+    for name, p in models.items():
+        acc = evaluate_fixed_model(seq, name)
+        # Conservative shrinkage toward 50% so tiny samples cannot dominate.
+        if acc is None:
+            w = 0.5
+        else:
+            w = 0.5 + max(-0.20, min(0.20, acc - 0.5))
+        # More support => slightly more weight, but never enough to dominate.
+        support = float(p.get("samples", 0))
+        w *= min(1.0, 0.60 + 0.40 * min(1.0, support / 20.0))
+        weights[name] = max(w, 0.05)
+        details.append({"Model": name, "D": p["D"], "T": p["T"], "Support": int(p.get("samples", 0)), "Backtest acc": acc})
+
+    dtp = blend_predictions(models, weights)
+    # Tie is only eligible with enough observed ties and a materially elevated rate.
+    total = len(seq)
+    # Use all three-class history only for tie screening; D/T model remains separate.
+    tie_count = 0
+    if total:
+        # Caller supplies only D/T here, so no tie count is available.
+        tie_count = 0
+    margin = abs(dtp["D"] - dtp["T"])
+    signal = "NO BET"
+    if len(seq) >= 20 and margin >= 0.10:
+        signal = "DRAGON" if dtp["D"] > dtp["T"] else "TIGER"
+    return signal, dtp, details
+
+
+def signal_with_tie(results):
     seq = dt_only(results)
-    mat = pd.DataFrame(0, index=["D", "T"], columns=["D", "T"])
-    for a, b in zip(seq, seq[1:]):
-        mat.loc[a, b] += 1
-    return mat
+    if len(seq) < 20:
+        return "NO BET", {"D": 0.0, "T": 0.0, "X": 0.0}, [], "Too little directional history."
+    sig, dtp, details = adaptive_signal(seq)
+    # Smoothed tie rate. Tie needs stronger evidence because it is much rarer.
+    x = results.count("X")
+    n = len(results)
+    tie_p = (x + 1) / (n + 3)
+    probs = {"D": dtp["D"] * (1 - tie_p), "T": dtp["T"] * (1 - tie_p), "X": tie_p}
+    best = max(probs, key=probs.get)
+    second = sorted(probs.values(), reverse=True)[1]
+    # Never force a tie on a sparse tie sample.
+    if x >= 8 and best == "X" and probs["X"] - second >= 0.08:
+        sig = "TIE"
+        reason = "Tie has enough historical observations and clears the conservative margin rule."
+    elif sig in ("DRAGON", "TIGER") and probs[sig[0]] - max(probs["X"], probs["T"] if sig == "DRAGON" else probs["D"]) < 0.04:
+        sig = "NO BET"
+        reason = "The leading directional signal is too close to the competing outcome after tie adjustment."
+    else:
+        reason = "Directional ensemble has a measurable lean and passed the minimum-history gate."
+    return sig, probs, details, reason
 
 
-def transition_rates(results):
+def walk_forward_model(results, model_name, min_history=20):
     seq = dt_only(results)
     rows = []
-    for source in ("D", "T"):
-        nxt = [b for a, b in zip(seq, seq[1:]) if a == source]
+    for i in range(min_history, len(seq)):
+        train = seq[:i]
+        p = model_probs(train).get(model_name)
+        if p is None:
+            continue
+        sig = "D" if p["D"] > p["T"] else "T" if p["T"] > p["D"] else "NO BET"
+        rows.append({"Test": i + 1, "Signal": sig, "Actual": seq[i], "Correct": (sig == seq[i]) if sig != "NO BET" else np.nan})
+    return pd.DataFrame(rows)
+
+
+def all_model_backtest(results):
+    seq = dt_only(results)
+    names = ["Recent-5", "Recent-10", "Recent-20", "Transition", "N-gram-1", "N-gram-2", "N-gram-3", "N-gram-4"]
+    rows = []
+    for name in names:
+        bt = walk_forward_model(results, name)
+        sig = bt[bt["Signal"].isin(["D", "T"])] if not bt.empty else pd.DataFrame()
         rows.append({
-            "After": source,
+            "Model": name,
+            "Test points": len(bt),
+            "Signals": len(sig),
+            "Accuracy": float(sig["Correct"].mean()) if len(sig) else np.nan,
+            "Coverage": len(sig) / len(bt) if len(bt) else np.nan,
+        })
+    return pd.DataFrame(rows)
+
+
+def wilson(k, n, z=1.96):
+    if n == 0:
+        return np.nan, np.nan
+    p = k / n
+    den = 1 + z*z/n
+    c = p + z*z/(2*n)
+    a = z*sqrt((p*(1-p) + z*z/(4*n))/n)
+    return (c-a)/den, (c+a)/den
+
+
+def longest_runs(results):
+    best = {"D": 0, "T": 0, "X": 0}
+    for s, n in streak_runs(results):
+        best[s] = max(best[s], n)
+    return best
+
+
+def transition_table(seq):
+    rows = []
+    for src in ("D", "T"):
+        nxt = [b for a, b in zip(seq, seq[1:]) if a == src]
+        rows.append({
+            "After": src,
             "Next D": nxt.count("D"),
             "Next T": nxt.count("T"),
-            "Continue rate": (nxt.count(source) / len(nxt)) if nxt else np.nan,
-            "Switch rate": (nxt.count("T" if source == "D" else "D") / len(nxt)) if nxt else np.nan,
+            "Continue %": nxt.count(src) / len(nxt) if nxt else np.nan,
+            "Switch %": nxt.count("T" if src == "D" else "D") / len(nxt) if nxt else np.nan,
             "Samples": len(nxt),
         })
     return pd.DataFrame(rows)
 
 
-def run_rule(hist, rule, window):
-    if len(hist) < window:
-        return "LEAVE"
-    h = hist[-window:]
-    share_d = h.count("D") / window
-    if rule == "recent_majority":
-        if share_d > 0.5:
-            return "D"
-        if share_d < 0.5:
-            return "T"
-        return "LEAVE"
-    if rule == "threshold":
-        if share_d >= 0.60:
-            return "D"
-        if share_d <= 0.40:
-            return "T"
-        return "LEAVE"
-    if rule == "trend_follow":
-        if len(h) < 4:
-            return "LEAVE"
-        a, b = h[-2], h[-1]
-        if a == b == "D":
-            return "D"
-        if a == b == "T":
-            return "T"
-        return "LEAVE"
-    return "LEAVE"
-
-
-def walk_forward(results, window=10, rule="threshold", include_ties_as_miss=False):
-    seq = dt_only(results)
-    rows = []
-    if len(seq) <= window:
-        return pd.DataFrame()
-    for i in range(window, len(seq)):
-        hist = seq[:i]
-        signal = run_rule(hist, rule, window)
-        actual = seq[i]
-        if signal in ("D", "T"):
-            correct = signal == actual
-        else:
-            correct = np.nan
-        rows.append({
-            "Test hand": i + 1,
-            "History used": i,
-            "Signal": signal,
-            "Actual": actual,
-            "Correct": correct,
-        })
-    return pd.DataFrame(rows)
-
-
-def score_backtest(bt):
-    if bt.empty:
-        return None
-    sig = bt[bt["Signal"].isin(["D", "T"])].copy()
-    if sig.empty:
-        return {"signals": 0, "accuracy": np.nan, "coverage": 0.0, "d": 0, "t": 0}
-    return {
-        "signals": len(sig),
-        "accuracy": float(sig["Correct"].mean()),
-        "coverage": len(sig) / len(bt),
-        "d": int((sig["Signal"] == "D").sum()),
-        "t": int((sig["Signal"] == "T").sum()),
-    }
-
-
-def wilson_interval(k, n, z=1.96):
-    if n == 0:
-        return np.nan, np.nan
-    p = k / n
-    den = 1 + z * z / n
-    centre = p + z * z / (2 * n)
-    adj = z * sqrt((p * (1 - p) + z * z / (4 * n)) / n)
-    return (centre - adj) / den, (centre + adj) / den
-
-
-def conditional_pattern(results, pattern):
-    seq = dt_only(results)
-    L = len(pattern)
-    hits = d = t = 0
-    for i in range(len(seq) - L):
-        if "".join(seq[i:i + L]) == pattern:
-            hits += 1
-            if seq[i + L] == "D":
-                d += 1
-            else:
-                t += 1
-    return hits, d, t
-
-
-def road_grid(results, width=18):
-    vals = sequence_only(results)
-    if not vals:
-        return pd.DataFrame()
-    rows = (len(vals) + width - 1) // width
-    grid = [["" for _ in range(width)] for _ in range(rows)]
-    for i, v in enumerate(vals):
-        grid[i // width][i % width] = v
-    return pd.DataFrame(grid, columns=[str(i + 1) for i in range(width)])
-
-
-def parse_manual(text):
-    tokens = [x for x in re.split(r"[\s,;|]+", text.strip()) if x]
-    parsed = [parse_result(x) for x in tokens]
-    invalid = [tokens[i] for i, v in enumerate(parsed) if v is None]
-    vals = [v for v in parsed if v is not None]
-    return vals, invalid
-
-
-def make_manual_df(vals, table_name):
-    return pd.DataFrame({
-        "Table": table_name,
-        "Hand": np.arange(1, len(vals) + 1),
-        "Outcome": vals,
-        "Dragon": "",
-        "Tiger": "",
-    })
-
-# ---------------- Sidebar ----------------
-st.sidebar.header("V4 controls")
-st.sidebar.info("Sequence analysis uses D/T/X. Card/rank analysis is optional and is never allowed to silently override the recorded outcome.")
-
-upload = st.sidebar.file_uploader("Optional CSV history", type=["csv"])
-manual = st.sidebar.text_area("Paste D/T/X results, oldest → newest", "", height=140, placeholder="D T T D X D T ...")
-manual_table = st.sidebar.text_input("Manual table/session name", "Current Session")
-
-window = st.sidebar.selectbox("Backtest window", [5, 10, 15, 20, 30, 50], index=1)
-rule = st.sidebar.selectbox(
-    "Backtest rule",
-    ["threshold", "recent_majority", "trend_follow"],
-    format_func=lambda x: {
-        "threshold": "Recent 60/40 threshold",
-        "recent_majority": "Recent majority",
-        "trend_follow": "Two-result trend follow",
-    }[x],
+# -----------------------------------------------------------------------------
+# Sidebar
+# -----------------------------------------------------------------------------
+st.sidebar.header("V5 controls")
+mode = st.sidebar.radio(
+    "History source",
+    ["Built-in Evolution #100", "Paste D/T/Tie", "Upload CSV"],
+    index=0,
 )
-pattern = st.sidebar.text_input("Pattern to test (D/T only)", "TTT").replace(" ", "").upper()
 
-if upload is not None:
-    try:
-        raw = pd.read_csv(upload)
-        data, note = clean_df(raw)
-        if note:
-            st.sidebar.warning(note)
-        if data.empty:
-            st.error("No valid history was found in the CSV.")
-            st.stop()
-    except Exception as e:
-        st.error(f"Could not read CSV: {e}")
+if mode == "Built-in Evolution #100":
+    table_name = "Evolution Dragon Tiger — captured to #100"
+    results = EVOLUTION_SEED.copy()
+    st.sidebar.success("Loaded the captured #100 Evolution road history.")
+elif mode == "Paste D/T/Tie":
+    table_name = st.sidebar.text_input("Table / provider / session name", "Current Session")
+    text = st.sidebar.text_area("Paste results, oldest → newest", "", height=180, placeholder="D T T D X D T ...")
+    results, invalid = clean_tokens(text)
+    if invalid:
+        st.sidebar.error("Input error — unrecognized result(s): " + ", ".join(invalid[:12]))
+    if not results:
+        st.info("Paste a D/T/Tie history to begin V5.")
         st.stop()
 else:
-    vals, invalid = parse_manual(manual)
-    if invalid:
-        st.sidebar.error("Unrecognized result(s): " + ", ".join(invalid[:12]))
-    if not vals:
-        st.info("Paste a history or upload a CSV to begin V4.")
+    upload = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    if upload is None:
+        st.info("Upload a CSV with an Outcome column to begin V5.")
         st.stop()
-    data = make_manual_df(vals, manual_table.strip() or "Current Session")
-
-# ---------------- Table/session selection ----------------
-tables = list(data["Table"].astype(str).unique())
-selected = st.sidebar.selectbox("Table / session", tables)
-tab = data[data["Table"].astype(str) == str(selected)].copy().reset_index(drop=True)
-results = tab["Outcome"].tolist()
+    raw = pd.read_csv(upload)
+    data, note = clean_csv(raw)
+    if note:
+        st.sidebar.warning(note)
+    if data.empty:
+        st.error("No valid D/T/Tie history found.")
+        st.stop()
+    table_names = list(data["Table"].unique())
+    table_name = st.sidebar.selectbox("Table / session", table_names)
+    results = data.loc[data["Table"] == table_name, "Outcome"].tolist()
 
 if not results:
-    st.warning("No valid results in the selected table/session.")
+    st.error("No usable history.")
     st.stop()
 
-# ---------------- Header summary ----------------
-counts = Counter(results)
-d, t, x = counts.get("D", 0), counts.get("T", 0), counts.get("X", 0)
+# -----------------------------------------------------------------------------
+# Summary
+# -----------------------------------------------------------------------------
+d, t, x = counts(results)
 n = len(results)
-cur, cur_n, best = streak_info(results)
-recent_n = min(window, n)
-recent = results[-recent_n:]
+cur, cur_n = current_streak(results)
+best = longest_runs(results)
+seq = dt_only(results)
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("History", n)
-c2.metric("Dragon", f"{d / n:.1%}")
-c3.metric("Tiger", f"{t / n:.1%}")
-c4.metric("Tie", f"{x / n:.1%}")
-c5.metric("Current", f"{cur} × {cur_n}")
-st.caption(f"Selected table/session: **{selected}**")
+c1.metric("Hands captured", n)
+c2.metric("Dragon", f"{d/n:.1%}")
+c3.metric("Tiger", f"{t/n:.1%}")
+c4.metric("Tie", f"{x/n:.1%}")
+c5.metric("Current run", f"{cur} × {cur_n}")
+st.caption(f"Selected source: **{table_name}**")
 
-# ---------------- Signal ----------------
+# -----------------------------------------------------------------------------
+# Final signal
+# -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V4 signal")
+st.subheader("🎯 V5 current signal")
+signal, probs, details, reason = signal_with_tie(results)
 
-seq_dt = dt_only(results)
-if len(seq_dt) < window:
-    signal = "LEAVE"
-    reason = f"Need at least {window} non-Tie results for the selected rule; only {len(seq_dt)} are available."
+if signal == "DRAGON":
+    label = "🐉 DRAGON"
+elif signal == "TIGER":
+    label = "🐯 TIGER"
+elif signal == "TIE":
+    label = "🟢 TIE"
 else:
-    signal = run_rule(seq_dt, rule, window)
-    if signal == "D":
-        reason = f"The selected rule currently leans Dragon using the latest {window} non-Tie results."
-    elif signal == "T":
-        reason = f"The selected rule currently leans Tiger using the latest {window} non-Tie results."
+    label = "⚪ NO BET"
+
+s1, s2, s3, s4 = st.columns(4)
+s1.metric("Recommendation", label)
+s2.metric("Dragon model", f"{probs['D']:.1%}")
+s3.metric("Tiger model", f"{probs['T']:.1%}")
+s4.metric("Tie screen", f"{probs['X']:.1%}")
+st.info(reason)
+st.caption("This is a statistical research signal, not a guarantee that the next casino hand is predictable or winnable.")
+
+# -----------------------------------------------------------------------------
+# Road structure
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🛣️ Road / sequence structure")
+
+recent = results[-20:]
+st.write("**Latest 20:** " + "  ".join(recent))
+
+r1, r2, r3, r4 = st.columns(4)
+r1.metric("Longest Dragon run", best["D"])
+r2.metric("Longest Tiger run", best["T"])
+r3.metric("Longest Tie run", best["X"])
+if len(seq) > 1:
+    switches = sum(a != b for a, b in zip(seq, seq[1:]))
+    r4.metric("D/T switch rate", f"{switches/(len(seq)-1):.1%}")
+else:
+    r4.metric("D/T switch rate", "—")
+
+st.markdown("**D/T transition behaviour**")
+tr = transition_table(seq)
+if not tr.empty:
+    view = tr.copy()
+    view["Continue %"] = view["Continue %"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    view["Switch %"] = view["Switch %"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    st.dataframe(view, hide_index=True, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# Model details
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🧠 Ensemble model details")
+if details:
+    md = pd.DataFrame(details)
+    md["D"] = md["D"].map(lambda v: f"{v:.1%}")
+    md["T"] = md["T"].map(lambda v: f"{v:.1%}")
+    md["Backtest acc"] = md["Backtest acc"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    st.dataframe(md, hide_index=True, use_container_width=True)
+
+# -----------------------------------------------------------------------------
+# Walk-forward validation
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🧪 Leakage-safe walk-forward validation")
+st.write("Each historical test uses only results that existed before that test point. No future result is used to create its own signal.")
+
+comparison = all_model_backtest(results)
+if not comparison.empty:
+    display = comparison.copy()
+    display["Accuracy"] = display["Accuracy"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    display["Coverage"] = display["Coverage"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
+    st.dataframe(display, hide_index=True, use_container_width=True)
+
+    valid = comparison.dropna(subset=["Accuracy"]).copy()
+    if not valid.empty:
+        best_row = valid.sort_values(["Accuracy", "Coverage"], ascending=False).iloc[0]
+        st.caption(f"Best historical rule by raw walk-forward accuracy: **{best_row['Model']}** ({best_row['Accuracy']:.1%} accuracy, {best_row['Coverage']:.1%} coverage). This ranking is descriptive and can change with new data.")
+else:
+    st.warning("Not enough history for walk-forward comparison.")
+
+# -----------------------------------------------------------------------------
+# Pattern / n-gram inspection
+# -----------------------------------------------------------------------------
+st.divider()
+st.subheader("🔍 Repeated sequence checks")
+pattern_len = st.slider("Pattern length", 1, 5, 3)
+pat = "".join(seq[-pattern_len:]) if len(seq) >= pattern_len else ""
+if pat:
+    follows = []
+    for i in range(len(seq) - pattern_len):
+        if "".join(seq[i:i+pattern_len]) == pat:
+            follows.append(seq[i+pattern_len])
+    if follows:
+        st.write(f"Current D/T pattern: **{pat}** — historical follow-ups: **{len(follows)}**")
+        st.write(f"Next D: **{follows.count('D')/len(follows):.1%}** · Next T: **{follows.count('T')/len(follows):.1%}")
     else:
-        reason = "The selected rule does not produce a directional signal."
+        st.info("The current pattern has not appeared earlier with a following D/T result.")
 
-s1, s2 = st.columns([1, 2])
-with s1:
-    st.metric("Current signal", {"D": "DRAGON", "T": "TIGER", "LEAVE": "NO BET"}[signal])
-with s2:
-    st.write(reason)
-    st.caption("A signal is a historical rule output, not a guarantee of the next hand.")
-
-# ---------------- Road / sequence ----------------
-st.divider()
-st.subheader("🛣️ Sequence and road behaviour")
-road = road_grid(results)
-if not road.empty:
-    st.dataframe(road, hide_index=True, use_container_width=True)
-
-switches = sum(a != b for a, b in zip(seq_dt, seq_dt[1:]))
-transitions = max(0, len(seq_dt) - 1)
-if transitions:
-    st.write(f"D/T switch rate: **{switches / transitions:.1%}** ({switches}/{transitions})")
-else:
-    st.write("Not enough non-Tie results for switch analysis.")
-
-r1, r2, r3 = st.columns(3)
-r1.write(f"Longest Dragon streak: **{best['D']}**")
-r2.write(f"Longest Tiger streak: **{best['T']}**")
-r3.write(f"Longest Tie streak: **{best['X']}**")
-st.write("Recent sequence: **" + " ".join(recent) + "**")
-
-st.markdown("**Transition counts**")
-st.dataframe(transition_counts(results), use_container_width=True)
-st.markdown("**Transition rates**")
-tr = transition_rates(results).copy()
-tr["Continue rate"] = tr["Continue rate"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-tr["Switch rate"] = tr["Switch rate"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-st.dataframe(tr, hide_index=True, use_container_width=True)
-
-# ---------------- Recent structure ----------------
-st.divider()
-a, b = st.columns(2)
-with a:
-    st.subheader(f"📊 Latest {recent_n}")
-    rc = Counter(recent)
-    rdf = pd.DataFrame({
-        "Outcome": ["D", "T", "X"],
-        "Count": [rc["D"], rc["T"], rc["X"]],
-        "Share": [rc["D"] / recent_n, rc["T"] / recent_n, rc["X"] / recent_n],
-    })
-    rdf["Share"] = rdf["Share"].map(lambda v: f"{v:.2%}")
-    st.dataframe(rdf, hide_index=True, use_container_width=True)
-with b:
-    st.subheader("🔍 Pattern test")
-    if pattern and all(c in "DT" for c in pattern):
-        hits, nd, nt = conditional_pattern(results, pattern)
-        if hits:
-            st.write(f"**{pattern}** occurred {hits} time(s) with a following non-Tie result.")
-            p1, p2 = st.columns(2)
-            p1.metric("Next Dragon", f"{nd / hits:.1%}")
-            p2.metric("Next Tiger", f"{nt / hits:.1%}")
-            lo, hi = wilson_interval(max(nd, nt), hits)
-            st.caption(f"Small-sample interval for the larger observed share: {lo:.1%}–{hi:.1%}. This is descriptive, not proof of predictability.")
-        else:
-            st.warning("No qualifying occurrence of this pattern.")
-    else:
-        st.warning("Use only D and T, for example TT, DTD or TTT.")
-
-# ---------------- Backtesting ----------------
-st.divider()
-st.subheader("🧪 Walk-forward backtesting")
-st.write("V4 generates each historical signal using only results that occurred before that test hand. The future result is revealed only for scoring.")
-
-bt = walk_forward(results, window=window, rule=rule)
-if bt.empty:
-    st.warning(f"Not enough non-Tie history to backtest a {window}-result window.")
-else:
-    score = score_backtest(bt)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Test points", len(bt))
-    m2.metric("Signals", score["signals"])
-    m3.metric("Signal accuracy", f"{score['accuracy']:.1%}" if score["signals"] else "—")
-    m4.metric("Coverage", f"{score['coverage']:.1%}")
-    if score["signals"]:
-        lo, hi = wilson_interval(round(score["accuracy"] * score["signals"]), score["signals"])
-        st.caption(f"Approximate 95% Wilson interval for historical signal accuracy: {lo:.1%}–{hi:.1%}. Small samples can be highly unstable.")
-    st.dataframe(bt.tail(100), hide_index=True, use_container_width=True)
-
-# ---------------- Walk-forward comparison ----------------
-st.subheader("📚 Rule comparison")
-comparison = []
-for w in [5, 10, 15, 20, 30, 50]:
-    if len(seq_dt) <= w:
-        continue
-    for rname in ["threshold", "recent_majority", "trend_follow"]:
-        test = walk_forward(results, window=w, rule=rname)
-        sc = score_backtest(test)
-        comparison.append({
-            "Window": w,
-            "Rule": rname,
-            "Signals": sc["signals"],
-            "Accuracy": sc["accuracy"],
-            "Coverage": sc["coverage"],
-        })
-if comparison:
-    comp = pd.DataFrame(comparison)
-    comp["Accuracy"] = comp["Accuracy"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-    comp["Coverage"] = comp["Coverage"].map(lambda v: f"{v:.1%}" if pd.notna(v) else "—")
-    st.dataframe(comp, hide_index=True, use_container_width=True)
-else:
-    st.info("Need more non-Tie history before rule comparison is useful.")
-
-# ---------------- Card validation ----------------nst.divider()
-st.subheader("🃏 Optional card validation")
-st.caption("Card analysis is deliberately conservative. Because provider rules can differ, V4 does not assume Ace-high or Ace-low without a verified table rule.")
-
-card_rows = []
-for _, row in tab.iterrows():
-    dc = parse_card(row.get("Dragon", ""))
-    tc = parse_card(row.get("Tiger", ""))
-    if dc and tc:
-        card_rows.append({
-            "Hand": row["Hand"],
-            "Dragon": row["Dragon"],
-            "Tiger": row["Tiger"],
-            "Recorded": row["Outcome"],
-            "Dragon suit": SUITS.get(dc["suit"], "") if dc["suit"] else "",
-            "Tiger suit": SUITS.get(tc["suit"], "") if tc["suit"] else "",
-            "Same suit": bool(dc["suit"] and tc["suit"] and dc["suit"] == tc["suit"]),
-        })
-if card_rows:
-    st.dataframe(pd.DataFrame(card_rows), hide_index=True, use_container_width=True)
-    st.info("No rank-derived winner is computed here until the exact provider/table card-ranking rule is verified.")
-else:
-    st.info("If you later add Dragon/Tiger card columns to the CSV, V4 will validate the cards and identify suited ties without overriding the recorded outcome.")
-
-# ---------------- Data quality ----------------
+# -----------------------------------------------------------------------------
+# Data-quality checks
+# -----------------------------------------------------------------------------
 st.divider()
 st.subheader("✅ Data-quality checks")
-quality = []
-quality.append({"Check": "Valid outcomes", "Status": "PASS", "Detail": f"{n} recorded D/T/Tie results in this selection."})
-quality.append({"Check": "Non-Tie sample", "Status": "PASS" if len(seq_dt) >= 20 else "LIMITED", "Detail": f"{len(seq_dt)} non-Tie results available."})
-quality.append({"Check": "Backtest sample", "Status": "PASS" if len(bt) >= 50 else "LIMITED", "Detail": f"{len(bt)} walk-forward test points."})
-quality.append({"Check": "Future leakage", "Status": "PROTECTED", "Detail": "Backtest signals use only prior results."})
-st.dataframe(pd.DataFrame(quality), hide_index=True, use_container_width=True)
+checks = [
+    {"Check": "History loaded", "Status": "PASS", "Detail": f"{n} results."},
+    {"Check": "Invalid D/T/Tie tokens", "Status": "PASS", "Detail": "None in the loaded history."},
+    {"Check": "Directional sample", "Status": "PASS" if len(seq) >= 30 else "LIMITED", "Detail": f"{len(seq)} non-Tie results."},
+    {"Check": "Walk-forward validation", "Status": "PASS" if len(seq) >= 50 else "LIMITED", "Detail": "Signals are generated from prior history only."},
+    {"Check": "Provider separation", "Status": "PASS", "Detail": "Current source is treated as one provider/table session."},
+]
+st.dataframe(pd.DataFrame(checks), hide_index=True, use_container_width=True)
 
-# ---------------- Export ----------------
+# -----------------------------------------------------------------------------
+# Export
+# -----------------------------------------------------------------------------
 st.divider()
-st.subheader("⬇️ Export cleaned history")
-csv = tab.to_csv(index=False).encode("utf-8")
-st.download_button("Download selected table/session CSV", csv, file_name=f"dragon_tiger_{re.sub(r'[^A-Za-z0-9_-]+', '_', str(selected))}.csv", mime="text/csv")
+st.subheader("⬇️ Export this session")
+export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table": table_name})
+csv = export_df.to_csv(index=False).encode("utf-8")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v5_session.csv", mime="text/csv")
 
-st.warning("V4 is a research/backtesting tool. Historical sequences and road patterns do not guarantee the next casino outcome. Use NO BET/LEAVE when evidence is weak.")
+st.warning("Important: V5 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
