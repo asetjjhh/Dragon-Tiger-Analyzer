@@ -10,7 +10,7 @@ import streamlit as st
 st.set_page_config(page_title="Dragon Tiger Analyzer V9", page_icon="🐉", layout="wide")
 
 st.title("🐉🐯 Dragon Tiger Analyzer — V9")
-st.caption("V9 • Error-safe validation, provider/session separation, confidence bounds, stability scoring and conservative signals.")
+st.caption("V9 • Error-safe validation, provider/session separation, verified historical records, confidence bounds, stability scoring and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -47,9 +47,9 @@ EMPEROR_EVOLUTION_63 = (
     "T D T D T D T T T D "
     "D T T T T D X T D D "
     "T D T D D T D D D T "
-    "D T D T D D D D D T "
-    "D D T X T T T D D D "
-    "D D D T"
+    "D T D T D T D D D D "
+    "D T D D X T T T D D "
+    "D D D D D D T"
 ).split()
 
 assert len(EMPEROR_EVOLUTION_63) == 63
@@ -425,7 +425,7 @@ def v6_ensemble(results, validation):
 st.sidebar.header("V9 controls")
 mode = st.sidebar.radio(
     "History source",
-    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Latest Evolution #102 (aggregate)", "Latest Pragmatic #112 (aggregate)", "Paste D/T/Tie", "Upload CSV"],
+    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Paste D/T/Tie", "Upload CSV"],
     index=0,
 )
 
@@ -437,14 +437,6 @@ elif mode == "Verified Emperor Evolution #63":
     table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
     results = EMPEROR_EVOLUTION_63.copy()
     st.sidebar.success("Loaded verified Emperor #1–#63: D35 / T24 / Tie4.")
-elif mode == "Latest Evolution #102 (aggregate)":
-    st.sidebar.info("Latest Evolution #102 is retained as a verified aggregate session. Exact hand-by-hand order was not stored, so V9 does not invent it.")
-    table_name = "Evolution Dragon Tiger — verified aggregate through #102"
-    results = list("D"*54 + "T"*40 + "X"*8)
-elif mode == "Latest Pragmatic #112 (aggregate)":
-    st.sidebar.info("Latest Pragmatic #112 is retained as a verified aggregate session. Exact hand-by-hand order was not stored, so V9 does not invent it.")
-    table_name = "Pragmatic Play Live Dragon Tiger — verified aggregate through #112"
-    results = list("D"*54 + "T"*49 + "X"*9)
 elif mode == "Paste D/T/Tie":
     table_name = st.sidebar.text_input("Table / provider / session name", "Current Session")
     text = st.sidebar.text_area("Paste results, oldest → newest", "", height=180, placeholder="D T T D X D T ...")
@@ -482,7 +474,7 @@ if not results:
 # -----------------------------------------------------------------------------
 with st.expander("📚 Historical verified sessions", expanded=False):
     st.dataframe(KNOWN_SESSIONS, hide_index=True, use_container_width=True)
-    st.caption("Aggregate-only sessions are shown for calibration/reference but are not treated as chronological hand sequences.")
+    st.caption("Latest verified aggregates: Evolution Dragon Tiger #102 = D54/T40/Tie8; Pragmatic Play Live Dragon Tiger #112 = D54/T49/Tie9. These are retained for reference and are not fabricated into chronological sequences.")
 
 d, t, x = counts(results)
 n = len(results)
