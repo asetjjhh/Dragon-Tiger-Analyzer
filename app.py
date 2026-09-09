@@ -9,8 +9,8 @@ import streamlit as st
 
 st.set_page_config(page_title="Dragon Tiger Analyzer V10.3", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10.3")
-st.caption("V10.3 • Frozen historical calibration, exact verified Emperor #1–#63 sequence, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.4")
+st.caption("V10.4 • Paste-first prediction workflow, exact verified Emperor #1–#63 sequence, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -482,7 +482,8 @@ elif mode == "Evolution Emperor — verified #1–#63":
     st.sidebar.success("Loaded the complete verified 63-hand Emperor sequence (D35 / T24 / Tie4).")
 elif mode == "Paste D/T/Tie history":
     table_name = st.sidebar.text_input("Table / provider / session name", "Pasted Session")
-    text = st.sidebar.text_area("Paste results, oldest → newest", "", height=160, placeholder="D T T D X D T ...")
+    st.sidebar.caption("Quick prediction: paste the recent results, oldest → newest. The next-hand estimate updates immediately.")
+    text = st.sidebar.text_area("Paste recent D/T/Tie results", "", height=160, placeholder="D T T D X D T ...")
     base_results, invalid = clean_tokens(text)
     calibration_results = base_results.copy()
     calibration_label = table_name
@@ -513,13 +514,17 @@ else:
 
 # Session state: live mode starts at zero; historical modes start from their
 # selected sequence. The frozen calibration is never mutated by live entry.
-if state_key not in st.session_state:
-    st.session_state[state_key] = list(base_results)
-
-if mode != "Live prediction — frozen calibration" and st.sidebar.checkbox("Reset this session to its selected starting history", value=False):
-    st.session_state[state_key] = list(base_results)
-
-results = st.session_state[state_key]
+if mode == "Paste D/T/Tie history":
+    # Paste-first mode: the textarea is the authoritative current history.
+    # Do not persist an older pasted value under the same session name.
+    results = list(base_results)
+    st.session_state[state_key] = results
+else:
+    if state_key not in st.session_state:
+        st.session_state[state_key] = list(base_results)
+    if mode != "Live prediction — frozen calibration" and st.sidebar.checkbox("Reset this session to its selected starting history", value=False):
+        st.session_state[state_key] = list(base_results)
+    results = st.session_state[state_key]
 
 st.sidebar.markdown("### ➕ Add newest result")
 a,b,c,d = st.sidebar.columns(4)
@@ -549,8 +554,8 @@ cur, cur_n = current_streak(analysis_results)
 best = longest_runs(analysis_results)
 seq = dt_only(analysis_results)
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10.3")
-st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10.3 recalculates the analysis after every hand.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.4")
+st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10.4 recalculates the analysis after every hand.")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Hands", n)
@@ -588,18 +593,32 @@ st.dataframe(reg, hide_index=True, use_container_width=True)
 # V10 robust signal
 # -----------------------------------------------------------------------------
 st.divider()
-st.subheader("🎯 V10.3 robust signal")
+st.subheader("🔮 Next-hand directional estimate")
+seq = dt_only(analysis_results)
+if len(seq) >= 5:
+    estimate_validation = v6_model_table(calibration_results if mode == "Live prediction — frozen calibration" else analysis_results)
+    estimate_probs, _ = v6_ensemble(analysis_results, estimate_validation)
+    est_label = "🐉 DRAGON" if estimate_probs["D"] > estimate_probs["T"] else "🐯 TIGER"
+    e1, e2, e3 = st.columns(3)
+    e1.metric("Estimate", est_label)
+    e2.metric("Dragon", f"{estimate_probs['D']:.1%}")
+    e3.metric("Tiger", f"{estimate_probs['T']:.1%}")
+    st.caption("This is the model's directional estimate for the next hand. It is separate from the stricter robust-bet gate below.")
+else:
+    st.info("Enter at least 5 non-Tie results to produce a directional estimate.")
+
+st.subheader("🎯 V10.4 robust signal")
 seq = dt_only(analysis_results)
 validation_source = calibration_results if mode == "Live prediction — frozen calibration" else analysis_results
 validation = v6_model_table(validation_source) if len(dt_only(validation_source)) >= 20 else pd.DataFrame()
 if len(seq) < 30:
-    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V10.3 directional gate."
+    signal, probs, details, reason = "NO BET", {"D":0.5,"T":0.5}, [], "At least 30 non-Tie results are required for the V10.4 directional gate."
 else:
     probs, details = v6_ensemble(analysis_results, validation)
     robust_count=int(validation["Robust"].sum()) if not validation.empty else 0
     margin=abs(probs["D"]-probs["T"])
     if robust_count < 1:
-        signal, reason = "NO BET", "No model passed the V10.3 robustness gate (support + confidence interval + significance)."
+        signal, reason = "NO BET", "No model passed the V10.4 robustness gate (support + confidence interval + significance)."
     elif margin < 0.08:
         signal, reason = "NO BET", "The ensemble edge is too small after model shrinkage."
     else:
@@ -667,7 +686,7 @@ else:
 # -----------------------------------------------------------------------------
 st.divider()
 st.subheader("🧪 V10.2 robust walk-forward validation")
-st.write("V10.3 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
+st.write("V10.4 reports raw accuracy, coverage, Wilson confidence bounds and an exact 50/50 screen. A rule is not called robust merely because its raw accuracy is high.")
 if not validation.empty:
     display=validation.copy()
     for c in ["Accuracy","Coverage","Wilson low","Wilson high"]: display[c]=display[c].map(lambda v:f"{v:.1%}" if pd.notna(v) else "—")
@@ -675,8 +694,8 @@ if not validation.empty:
     display["Robust"]=display["Robust"].map(lambda v:"PASS" if v else "—")
     st.dataframe(display,hide_index=True,use_container_width=True)
     rc=int(validation["Robust"].sum())
-    if rc: st.success(f"{rc} model(s) pass the V10.3 robustness gate.")
-    else: st.warning("No model passes the V10.3 robustness gate. V10.3 returns NO BET rather than promoting historical noise.")
+    if rc: st.success(f"{rc} model(s) pass the V10.4 robustness gate.")
+    else: st.warning("No model passes the V10.4 robustness gate. V10.4 returns NO BET rather than promoting historical noise.")
 else:
     st.warning("Not enough directional history for robust validation.")
 
@@ -749,6 +768,6 @@ st.subheader("⬇️ Export this session")
 export_source = results if mode == "Live prediction — frozen calibration" else analysis_results
 export_df = pd.DataFrame({"Hand": np.arange(1, len(export_source)+1), "Outcome": export_source, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_3_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_4_session.csv", mime="text/csv")
 
 st.warning("Important: V10.3 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
