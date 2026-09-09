@@ -7,10 +7,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-st.set_page_config(page_title="Dragon Tiger Analyzer V10", page_icon="🐉", layout="wide")
+st.set_page_config(page_title="Dragon Tiger Analyzer V10.1", page_icon="🐉", layout="wide")
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10")
-st.caption("V10 • Frozen historical calibration, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.1")
+st.caption("V10.1 • Frozen historical calibration, exact verified Emperor #1–#63 sequence, live session tracking, provider/session separation, walk-forward validation and conservative signals.")
 
 # -----------------------------------------------------------------------------
 # Captured Evolution table snapshot (#100)
@@ -407,11 +407,19 @@ def v6_ensemble(results, validation):
 
 EVOLUTION_SEED = EVOLUTION_SEED  # preserved verified 100-hand reconstruction
 
-# Verified visible tail from the supplied V9 Emperor #1-#63 screen. The V9
-# screen also showed the authoritative aggregate D35/T24/Tie4. Because the
-# middle hands are not reproduced in the current source artifact, V10 does not
-# fabricate them.
-EMPEROR_63_TAIL = "T D D D D D T D D X T T D D D D D D D T".split()
+# Complete authoritative Emperor #1–#63 sequence supplied by the user.
+# D = Dragon, T = Tiger, X = Tie. Counts must remain D35 / T24 / Tie4.
+EMPEROR_63_SEQUENCE = (
+    "D T D D X D D D T X "
+    "T D T D T D T T T D "
+    "D T T T T D X T D D "
+    "T D T D D T D D D T "
+    "D T D T D D D D D T "
+    "D D X T T T D D D D "
+    "D D T"
+).split()
+assert len(EMPEROR_63_SEQUENCE) == 63
+assert counts(EMPEROR_63_SEQUENCE) == (35, 24, 4)
 
 # Frozen aggregate registry. These are evidence records, not synthetic sequences.
 SESSION_REGISTRY = pd.DataFrame([
@@ -426,7 +434,7 @@ source = st.sidebar.radio(
     "Starting history",
     [
         "Evolution Dragon Tiger — verified #100",
-        "Evolution Emperor — verified #1–#63 (tail)",
+        "Evolution Emperor — verified #1–#63",
         "New live session — start empty",
         "Paste D/T/Tie history",
         "Upload CSV",
@@ -438,10 +446,10 @@ if source == "Evolution Dragon Tiger — verified #100":
     table_name = "Evolution Dragon Tiger — verified #100"
     base_results = EVOLUTION_SEED.copy()
     st.sidebar.success("Loaded the verified 100-hand Evolution sequence.")
-elif source == "Evolution Emperor — verified #1–#63 (tail)":
+elif source == "Evolution Emperor — verified #1–#63":
     table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
-    base_results = EMPEROR_63_TAIL.copy()
-    st.sidebar.warning("Only the last 20 hands are sequence-verified in the current source artifact. V10 will not invent the missing middle hands.")
+    base_results = EMPEROR_63_SEQUENCE.copy()
+    st.sidebar.success("Loaded the complete verified 63-hand Emperor sequence (D35 / T24 / Tie4).")
 elif source == "New live session — start empty":
     table_name = st.sidebar.text_input("Live table / provider / session name", "New Live Session")
     base_results = []
@@ -501,8 +509,8 @@ cur, cur_n = current_streak(results)
 best = longest_runs(results)
 seq = dt_only(results)
 
-st.title("🐉🐯 Dragon Tiger Analyzer — V10")
-st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10 recalculates the analysis after every hand.")
+st.title("🐉🐯 Dragon Tiger Analyzer — V10.1")
+st.caption("Frozen calibration + live session mode. Enter only the newest D/T/Tie result; V10.1 recalculates the analysis after every hand.")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Hands", n)
@@ -695,6 +703,6 @@ st.divider()
 st.subheader("⬇️ Export this session")
 export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v10_1_session.csv", mime="text/csv")
 
-st.warning("Important: V10 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
+st.warning("Important: V10.1 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
