@@ -41,12 +41,33 @@ EVOLUTION_SEED = (
 
 assert len(EVOLUTION_SEED) == 100
 
+# Verified Evolution — Emperor Dragon & Tiger #1–#63.
+EMPEROR_EVOLUTION_63 = (
+    "D T D D X D D D T X "
+    "T D T D T D T T T D "
+    "D T T T T D X T D D "
+    "T D T D D T D D D T "
+    "D T D T D D D D D T "
+    "D D T X T T T D D D "
+    "D D D T"
+).split()
+
+assert len(EMPEROR_EVOLUTION_63) == 63
+assert EMPEROR_EVOLUTION_63.count("D") == 35
+assert EMPEROR_EVOLUTION_63.count("T") == 24
+assert EMPEROR_EVOLUTION_63.count("X") == 4
+
 # Verified aggregate summaries from the supplied completed screenshots.
 # These are intentionally NOT converted into invented hand-by-hand sequences.
 KNOWN_SESSIONS = pd.DataFrame([
-    {"Provider":"Evolution", "Game":"Dragon Tiger", "Captured through":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence available":False},
-    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Captured through":92, "Dragon":43, "Tiger":42, "Tie":7, "Sequence available":False},
-    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Captured through":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence available":False},
+    # Latest verified completed sessions supplied by the user.
+    {"Provider":"Evolution", "Game":"Dragon Tiger", "Session":"Latest verified #1–#102", "Captured through":102, "Dragon":54, "Tiger":40, "Tie":8, "Sequence available":False},
+    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Session":"Latest verified #1–#112", "Captured through":112, "Dragon":54, "Tiger":49, "Tie":9, "Sequence available":False},
+    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Session":"Verified #1–#63", "Captured through":63, "Dragon":35, "Tiger":24, "Tie":4, "Sequence available":True},
+    # Older verified aggregate checkpoints are retained separately.
+    {"Provider":"Evolution", "Game":"Dragon Tiger", "Session":"Older verified #1–#145 checkpoint", "Captured through":145, "Dragon":64, "Tiger":72, "Tie":9, "Sequence available":False},
+    {"Provider":"Pragmatic Play Live", "Game":"Dragon Tiger", "Session":"Older verified #1–#92 checkpoint", "Captured through":92, "Dragon":43, "Tiger":42, "Tie":7, "Sequence available":False},
+    {"Provider":"Evolution", "Game":"Emperor Dragon and Tiger", "Session":"Older verified #1–#77 checkpoint", "Captured through":77, "Dragon":38, "Tiger":35, "Tie":4, "Sequence available":False},
 ])
 
 
@@ -404,7 +425,7 @@ def v6_ensemble(results, validation):
 st.sidebar.header("V9 controls")
 mode = st.sidebar.radio(
     "History source",
-    ["Built-in Evolution #100", "Paste D/T/Tie", "Upload CSV"],
+    ["Built-in Evolution #100", "Verified Emperor Evolution #63", "Latest Evolution #102 (aggregate)", "Latest Pragmatic #112 (aggregate)", "Paste D/T/Tie", "Upload CSV"],
     index=0,
 )
 
@@ -412,6 +433,18 @@ if mode == "Built-in Evolution #100":
     table_name = "Evolution Dragon Tiger — captured to #100"
     results = EVOLUTION_SEED.copy()
     st.sidebar.success("Loaded the captured #100 Evolution road history.")
+elif mode == "Verified Emperor Evolution #63":
+    table_name = "Evolution Emperor Dragon & Tiger — verified #1–#63"
+    results = EMPEROR_EVOLUTION_63.copy()
+    st.sidebar.success("Loaded verified Emperor #1–#63: D35 / T24 / Tie4.")
+elif mode == "Latest Evolution #102 (aggregate)":
+    st.sidebar.info("Latest Evolution #102 is retained as a verified aggregate session. Exact hand-by-hand order was not stored, so V9 does not invent it.")
+    table_name = "Evolution Dragon Tiger — verified aggregate through #102"
+    results = list("D"*54 + "T"*40 + "X"*8)
+elif mode == "Latest Pragmatic #112 (aggregate)":
+    st.sidebar.info("Latest Pragmatic #112 is retained as a verified aggregate session. Exact hand-by-hand order was not stored, so V9 does not invent it.")
+    table_name = "Pragmatic Play Live Dragon Tiger — verified aggregate through #112"
+    results = list("D"*54 + "T"*49 + "X"*9)
 elif mode == "Paste D/T/Tie":
     table_name = st.sidebar.text_input("Table / provider / session name", "Current Session")
     text = st.sidebar.text_area("Paste results, oldest → newest", "", height=180, placeholder="D T T D X D T ...")
@@ -444,6 +477,13 @@ if not results:
 # -----------------------------------------------------------------------------
 # Summary
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Historical verified sessions
+# -----------------------------------------------------------------------------
+with st.expander("📚 Historical verified sessions", expanded=False):
+    st.dataframe(KNOWN_SESSIONS, hide_index=True, use_container_width=True)
+    st.caption("Aggregate-only sessions are shown for calibration/reference but are not treated as chronological hand sequences.")
+
 d, t, x = counts(results)
 n = len(results)
 cur, cur_n = current_streak(results)
@@ -631,6 +671,6 @@ st.divider()
 st.subheader("⬇️ Export this session")
 export_df = pd.DataFrame({"Hand": np.arange(1, n+1), "Outcome": results, "Table": table_name})
 csv = export_df.to_csv(index=False).encode("utf-8")
-st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v6_session.csv", mime="text/csv")
+st.download_button("Download cleaned session CSV", csv, file_name="dragon_tiger_v9_session.csv", mime="text/csv")
 
 st.warning("Important: V9 is for statistical research and validation. Historical road patterns, streaks and model accuracy cannot guarantee the next casino outcome.")
